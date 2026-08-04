@@ -3,6 +3,30 @@ import { tf } from './tfSetup';
 export const WORKING_MAX_DIMENSION = 1024;
 export const MODEL_INPUT_SIZE = 224;
 
+const HEIC_EXTENSION = /\.hei[cf]$/i;
+const HEIC_MIME_TYPES = new Set(['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence']);
+
+export function isHeicFile(file: File): boolean {
+  return HEIC_MIME_TYPES.has(file.type.toLowerCase()) || HEIC_EXTENSION.test(file.name);
+}
+
+/**
+ * Chrome (unlike Safari) has no built-in HEIC/HEIF decoder, so `<img>` and canvas APIs can't read
+ * photos straight off an iPhone. This transcodes to JPEG client-side before anything else touches the file.
+ */
+export async function ensureBrowserDecodableImage(file: File): Promise<File> {
+  if (!isHeicFile(file)) {
+    return file;
+  }
+
+  const { default: heic2any } = await import('heic2any');
+  const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
+  const jpegBlob = Array.isArray(result) ? result[0] : result;
+  const newName = file.name.replace(HEIC_EXTENSION, '.jpg') || 'converted.jpg';
+
+  return new File([jpegBlob], newName, { type: 'image/jpeg' });
+}
+
 export function loadImageFromFile(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
