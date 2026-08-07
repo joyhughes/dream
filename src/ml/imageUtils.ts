@@ -13,15 +13,22 @@ export function isHeicFile(file: File): boolean {
 /**
  * Chrome (unlike Safari) has no built-in HEIC/HEIF decoder, so `<img>` and canvas APIs can't read
  * photos straight off an iPhone. This transcodes to JPEG client-side before anything else touches the file.
+ * The decoder is lazy-loaded (dynamic import) so non-HEIC uploads never pay for it.
  */
 export async function ensureBrowserDecodableImage(file: File): Promise<File> {
   if (!isHeicFile(file)) {
     return file;
   }
 
-  const { default: heic2any } = await import('heic2any');
-  const result = await heic2any({ blob: file, toType: 'image/jpeg', quality: 0.92 });
-  const jpegBlob = Array.isArray(result) ? result[0] : result;
+  const { isHeic, heicTo } = await import('heic-to');
+
+  // The name/MIME check above is just a cheap gate for whether to load the decoder at all;
+  // heic-to's isHeic reads the file's actual byte signature, which is what we trust.
+  if (!(await isHeic(file))) {
+    return file;
+  }
+
+  const jpegBlob = await heicTo({ blob: file, type: 'image/jpeg', quality: 0.92 });
   const newName = file.name.replace(HEIC_EXTENSION, '.jpg') || 'converted.jpg';
 
   return new File([jpegBlob], newName, { type: 'image/jpeg' });

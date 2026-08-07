@@ -33,7 +33,14 @@ export function ImageDropzone({ label, hint, onFileSelected, previewUrl }: Image
         const decodable = await ensureBrowserDecodableImage(file);
         onFileSelected(decodable);
       } catch (err) {
-        setConversionError(err instanceof Error ? err.message : 'Could not convert this HEIC file.');
+        console.error('HEIC conversion failed:', err);
+        const message =
+          err instanceof Error
+            ? err.message
+            : typeof err === 'object' && err !== null && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : 'Could not convert this HEIC file (see console for details).';
+        setConversionError(message);
       } finally {
         setIsConverting(false);
       }
