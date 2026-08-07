@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ImageDropzone } from './components/ImageDropzone';
+import { BuiltInTemplatePicker } from './components/BuiltInTemplatePicker';
 import { ModeTabs } from './components/ModeTabs';
 import { WebGPUStatus } from './components/WebGPUStatus';
 import { ControlsPanel } from './components/ControlsPanel';
@@ -229,12 +230,15 @@ function App() {
               previewUrl={basePreviewUrl}
             />
             {mode === 'style' && (
-              <ImageDropzone
-                label="Dream template (style)"
-                hint="The image whose style/patterns get imprinted onto the first image"
-                onFileSelected={handleTemplateFile}
-                previewUrl={templatePreviewUrl}
-              />
+              <>
+                <ImageDropzone
+                  label="Dream template (style)"
+                  hint="The image whose style/patterns get imprinted onto the first image"
+                  onFileSelected={handleTemplateFile}
+                  previewUrl={templatePreviewUrl}
+                />
+                <BuiltInTemplatePicker onSelect={handleTemplateFile} disabled={isRunning} />
+              </>
             )}
           </div>
 
