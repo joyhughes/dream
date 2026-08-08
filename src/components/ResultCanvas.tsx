@@ -62,11 +62,20 @@ export function ResultCanvas({
         </span>
         <div className="result-status-actions">
           {canSaveCurrentStep && (
-            <button className="btn btn--secondary" onClick={onSaveCurrentStep}>
+            <button
+              className="btn btn--secondary"
+              onClick={onSaveCurrentStep}
+              title="Downloads the current in-progress frame as a PNG without stopping the run."
+            >
               Save current step
             </button>
           )}
-          <button className="btn btn--secondary" onClick={onDownload} disabled={!hasResult}>
+          <button
+            className="btn btn--secondary"
+            onClick={onDownload}
+            disabled={!hasResult}
+            title="Downloads the finished result as a PNG file."
+          >
             Download PNG
           </button>
         </div>

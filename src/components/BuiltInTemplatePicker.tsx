@@ -42,7 +42,12 @@ export function BuiltInTemplatePicker({ onSelect, disabled }: BuiltInTemplatePic
 
   return (
     <div className="builtin-templates">
-      <span className="builtin-templates-label">Or use a built-in template</span>
+      <span
+        className="builtin-templates-label"
+        title="Skip uploading your own style image and use one of these ready-made templates instead."
+      >
+        Or use a built-in template
+      </span>
       <div className="builtin-templates-row">
         {BUILT_IN_TEMPLATES.map((template) => (
           <button
@@ -51,7 +56,7 @@ export function BuiltInTemplatePicker({ onSelect, disabled }: BuiltInTemplatePic
             className="builtin-template-thumb"
             onClick={() => void handlePick(template.id)}
             disabled={disabled || pendingId !== null}
-            title={template.name}
+            title={`Use the "${template.name}" built-in image as the style template.`}
           >
             {thumbnails[template.id] && <img src={thumbnails[template.id]} alt={template.name} />}
             <span>{pendingId === template.id ? 'Loading…' : template.name}</span>

@@ -15,6 +15,7 @@ export function ModeTabs({ mode, onChange, disabled }: ModeTabsProps) {
         className={`mode-tab${mode === 'deepdream' ? ' mode-tab--active' : ''}`}
         onClick={() => onChange('deepdream')}
         disabled={disabled}
+        title="DeepDream amplifies patterns the MobileNet network already 'sees' in your photo, enhancing whatever textures and shapes activate its layers most strongly — the classic dream-like effect."
       >
         DeepDream
       </button>
@@ -24,6 +25,7 @@ export function ModeTabs({ mode, onChange, disabled }: ModeTabsProps) {
         className={`mode-tab${mode === 'style' ? ' mode-tab--active' : ''}`}
         onClick={() => onChange('style')}
         disabled={disabled}
+        title="Style Transfer repaints your photo using the colors, textures, and brushwork of a second template image, while keeping your photo's original content and layout."
       >
         Style Transfer
       </button>

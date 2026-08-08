@@ -3,7 +3,7 @@ import { ImageDropzone } from './components/ImageDropzone';
 import { BuiltInTemplatePicker } from './components/BuiltInTemplatePicker';
 import { ModeTabs } from './components/ModeTabs';
 import { WebGPUStatus } from './components/WebGPUStatus';
-import { ControlsPanel } from './components/ControlsPanel';
+import { PresetPanel, SliderPanel, ActionsBar } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
 import { initializeML, type BackendInfo } from './ml/tfSetup';
 import { loadFeatureModel, type FeatureModel } from './ml/mobilenetFeatures';
@@ -280,8 +280,6 @@ function App() {
         <WebGPUStatus info={backendInfo} error={initError} />
       </header>
 
-      <ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />
-
       <div className="main-layout">
         <ResultCanvas
           canvasRef={canvasRef}
@@ -294,43 +292,62 @@ function App() {
         />
 
         <div className="sidebar-column">
-          <div className="dropzones-row">
-            <ImageDropzone
-              label="Image to alter"
-              hint="The photo DeepDream / style transfer will transform"
-              onFileSelected={handleBaseFile}
-              previewUrl={basePreviewUrl}
+          <div className="controls-left">
+            <ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />
+
+            <div className="dropzones-row">
+              <ImageDropzone
+                label="Image to alter"
+                hint="The photo DeepDream / style transfer will transform"
+                tooltip="The photo that DeepDream or Style Transfer will transform. Drop an image here or click to browse your files."
+                onFileSelected={handleBaseFile}
+                previewUrl={basePreviewUrl}
+              />
+              {mode === 'style' && (
+                <>
+                  <ImageDropzone
+                    label="Dream template (style)"
+                    hint="The image whose style/patterns get imprinted onto the first image"
+                    tooltip="The style image whose colors, textures, and patterns get imprinted onto your photo. Images with strong, distinctive visual patterns tend to work best."
+                    onFileSelected={handleTemplateFile}
+                    previewUrl={templatePreviewUrl}
+                  />
+                  <BuiltInTemplatePicker onSelect={handleTemplateFile} disabled={isRunning} />
+                </>
+              )}
+            </div>
+
+            <PresetPanel
+              mode={mode}
+              presets={presets}
+              selectedPresetId={selectedPresetId}
+              onPresetChange={setSelectedPresetId}
+              isRunning={isRunning}
             />
-            {mode === 'style' && (
-              <>
-                <ImageDropzone
-                  label="Dream template (style)"
-                  hint="The image whose style/patterns get imprinted onto the first image"
-                  onFileSelected={handleTemplateFile}
-                  previewUrl={templatePreviewUrl}
-                />
-                <BuiltInTemplatePicker onSelect={handleTemplateFile} disabled={isRunning} />
-              </>
-            )}
           </div>
 
-          <ControlsPanel
-            mode={mode}
-            presets={presets}
-            selectedPresetId={selectedPresetId}
-            onPresetChange={setSelectedPresetId}
-            dreamParams={dreamParams}
-            onDreamParamsChange={setDreamParams}
-            styleParams={styleParams}
-            onStyleParamsChange={setStyleParams}
-            onGenerate={handleGenerate}
-            onCancel={handleCancel}
-            onPause={handlePause}
-            onResume={handleResume}
-            isRunning={isRunning}
-            isPaused={isPaused}
-            canGenerate={canGenerate}
-          />
+          <div className="controls-right">
+            <SliderPanel
+              mode={mode}
+              dreamParams={dreamParams}
+              onDreamParamsChange={setDreamParams}
+              styleParams={styleParams}
+              onStyleParamsChange={setStyleParams}
+              isRunning={isRunning}
+            />
+          </div>
+
+          <div className="controls-actions-row">
+            <ActionsBar
+              onGenerate={handleGenerate}
+              onCancel={handleCancel}
+              onPause={handlePause}
+              onResume={handleResume}
+              isRunning={isRunning}
+              isPaused={isPaused}
+              canGenerate={canGenerate}
+            />
+          </div>
         </div>
       </div>
     </>

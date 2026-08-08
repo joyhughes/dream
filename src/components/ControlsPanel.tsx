@@ -6,13 +6,14 @@ interface SliderProps {
   min: number;
   max: number;
   step: number;
+  tooltip: string;
   onChange: (value: number) => void;
   disabled?: boolean;
 }
 
-function Slider({ label, value, min, max, step, onChange, disabled }: SliderProps) {
+function Slider({ label, value, min, max, step, tooltip, onChange, disabled }: SliderProps) {
   return (
-    <label className="slider-row">
+    <label className="slider-row" title={tooltip}>
       <span className="slider-label">
         {label} <span className="slider-value">{value}</span>
       </span>
@@ -29,57 +30,58 @@ function Slider({ label, value, min, max, step, onChange, disabled }: SliderProp
   );
 }
 
-interface ControlsPanelProps {
+interface PresetPanelProps {
   mode: Mode;
   presets: DreamPreset[];
   selectedPresetId: string;
   onPresetChange: (id: string) => void;
+  isRunning: boolean;
+}
+
+export function PresetPanel({ mode, presets, selectedPresetId, onPresetChange, isRunning }: PresetPanelProps) {
+  if (mode !== 'deepdream') return null;
+
+  return (
+    <div className="preset-panel">
+      <label
+        className="field-row"
+        title="Chooses which layer(s) of the MobileNet network to amplify. Early layers pick out fine edges, grain, and texture; later layers pick out increasingly abstract, object-like forms."
+      >
+        <span>Preset</span>
+        <select value={selectedPresetId} onChange={(e) => onPresetChange(e.target.value)} disabled={isRunning}>
+          {presets.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="field-hint">{presets.find((p) => p.id === selectedPresetId)?.description}</p>
+    </div>
+  );
+}
+
+interface SliderPanelProps {
+  mode: Mode;
   dreamParams: DreamParams;
   onDreamParamsChange: (params: DreamParams) => void;
   styleParams: StyleParams;
   onStyleParamsChange: (params: StyleParams) => void;
-  onGenerate: () => void;
-  onCancel: () => void;
-  onPause: () => void;
-  onResume: () => void;
   isRunning: boolean;
-  isPaused: boolean;
-  canGenerate: boolean;
 }
 
-export function ControlsPanel({
+export function SliderPanel({
   mode,
-  presets,
-  selectedPresetId,
-  onPresetChange,
   dreamParams,
   onDreamParamsChange,
   styleParams,
   onStyleParamsChange,
-  onGenerate,
-  onCancel,
-  onPause,
-  onResume,
   isRunning,
-  isPaused,
-  canGenerate,
-}: ControlsPanelProps) {
+}: SliderPanelProps) {
   return (
-    <div className="controls-panel">
+    <div className="slider-panel">
       {mode === 'deepdream' ? (
         <>
-          <label className="field-row">
-            <span>Preset</span>
-            <select value={selectedPresetId} onChange={(e) => onPresetChange(e.target.value)} disabled={isRunning}>
-              {presets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className="field-hint">{presets.find((p) => p.id === selectedPresetId)?.description}</p>
-
           <Slider
             label="Octaves"
             value={dreamParams.octaves}
@@ -87,6 +89,7 @@ export function ControlsPanel({
             max={6}
             step={1}
             disabled={isRunning}
+            tooltip="How many times the image is progressively scaled up during processing. More octaves build the pattern at multiple sizes at once, giving richer, more elaborate detail — but each extra octave takes longer to run."
             onChange={(v) => onDreamParamsChange({ ...dreamParams, octaves: v })}
           />
           <Slider
@@ -96,6 +99,7 @@ export function ControlsPanel({
             max={2}
             step={0.05}
             disabled={isRunning}
+            tooltip="How much larger each successive octave is than the one before it. A higher scale makes bigger jumps in pattern size between octaves, spreading detail across more dramatically different scales."
             onChange={(v) => onDreamParamsChange({ ...dreamParams, octaveScale: v })}
           />
           <Slider
@@ -105,6 +109,7 @@ export function ControlsPanel({
             max={100}
             step={5}
             disabled={isRunning}
+            tooltip="How many gradient-ascent steps run at each octave. More steps intensify and refine the effect at each scale, but increase processing time proportionally."
             onChange={(v) => onDreamParamsChange({ ...dreamParams, stepsPerOctave: v })}
           />
           <Slider
@@ -114,6 +119,7 @@ export function ControlsPanel({
             max={0.1}
             step={0.005}
             disabled={isRunning}
+            tooltip="How strongly each step nudges the image toward the target pattern. Higher values build the effect faster and more dramatically, but can quickly turn noisy or overcooked."
             onChange={(v) => onDreamParamsChange({ ...dreamParams, stepSize: v })}
           />
           <Slider
@@ -123,12 +129,9 @@ export function ControlsPanel({
             max={512}
             step={32}
             disabled={isRunning}
+            tooltip="The size of the tiles the image is split into while processing. Smaller tiles capture more native detail on large images but take longer per step — 224 is the network's native resolution and gives maximum fidelity."
             onChange={(v) => onDreamParamsChange({ ...dreamParams, tileSize: v })}
           />
-          <p className="field-hint">
-            Smaller tiles capture more native detail on large images but take longer per step — 224 is the
-            network&apos;s native resolution and gives maximum fidelity.
-          </p>
         </>
       ) : (
         <>
@@ -139,6 +142,7 @@ export function ControlsPanel({
             max={50}
             step={1}
             disabled={isRunning}
+            tooltip="How strongly the result is pulled to preserve the original photo's content and layout. Higher values keep the underlying scene more recognizable."
             onChange={(v) => onStyleParamsChange({ ...styleParams, contentWeight: v })}
           />
           <Slider
@@ -148,6 +152,7 @@ export function ControlsPanel({
             max={2000}
             step={10}
             disabled={isRunning}
+            tooltip="How strongly the result is pulled to match the template's colors, textures, and patterns. Higher values make the style more dominant over the original content."
             onChange={(v) => onStyleParamsChange({ ...styleParams, styleWeight: v })}
           />
           <Slider
@@ -157,6 +162,7 @@ export function ControlsPanel({
             max={5}
             step={0.1}
             disabled={isRunning}
+            tooltip="Penalizes noisy, high-frequency detail to keep the result smooth. Higher values reduce speckling and graininess, at the cost of some fine detail."
             onChange={(v) => onStyleParamsChange({ ...styleParams, totalVariationWeight: v })}
           />
           <Slider
@@ -166,6 +172,7 @@ export function ControlsPanel({
             max={0.05}
             step={0.002}
             disabled={isRunning}
+            tooltip="How large a step the optimizer takes on each iteration. Higher values converge faster but can overshoot, producing unstable or noisy results."
             onChange={(v) => onStyleParamsChange({ ...styleParams, learningRate: v })}
           />
           <Slider
@@ -175,6 +182,7 @@ export function ControlsPanel({
             max={5}
             step={1}
             disabled={isRunning}
+            tooltip="How many times the image is progressively scaled up during processing, letting style patterns form at multiple sizes. More octaves add detail but take longer to run."
             onChange={(v) => onStyleParamsChange({ ...styleParams, octaves: v })}
           />
           <Slider
@@ -184,6 +192,7 @@ export function ControlsPanel({
             max={2}
             step={0.05}
             disabled={isRunning}
+            tooltip="How much larger each successive octave is than the one before it. A higher scale makes bigger jumps in pattern size between octaves."
             onChange={(v) => onStyleParamsChange({ ...styleParams, octaveScale: v })}
           />
           <Slider
@@ -193,6 +202,7 @@ export function ControlsPanel({
             max={150}
             step={5}
             disabled={isRunning}
+            tooltip="How many optimization steps run at each octave. More steps refine the result further, but increase processing time proportionally."
             onChange={(v) => onStyleParamsChange({ ...styleParams, stepsPerOctave: v })}
           />
           <Slider
@@ -202,30 +212,70 @@ export function ControlsPanel({
             max={512}
             step={32}
             disabled={isRunning}
+            tooltip="The size of the tiles the image is split into while processing. Smaller tiles capture more native detail on large images but take longer per step — 224 is the network's native resolution and gives maximum fidelity."
             onChange={(v) => onStyleParamsChange({ ...styleParams, tileSize: v })}
           />
-          <p className="field-hint">
-            Smaller tiles capture more native detail on large images but take longer per step — 224 is the
-            network&apos;s native resolution and gives maximum fidelity.
-          </p>
         </>
       )}
+      <p className="field-hint">
+        Smaller tiles capture more native detail on large images but take longer per step — 224 is the
+        network&apos;s native resolution and gives maximum fidelity.
+      </p>
+    </div>
+  );
+}
 
-      <div className="controls-actions">
-        <button className="btn btn--primary" onClick={onGenerate} disabled={!canGenerate || isRunning}>
-          {isRunning ? (isPaused ? 'Paused' : 'Generating…') : 'Generate'}
+interface ActionsBarProps {
+  onGenerate: () => void;
+  onCancel: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  isRunning: boolean;
+  isPaused: boolean;
+  canGenerate: boolean;
+}
+
+export function ActionsBar({
+  onGenerate,
+  onCancel,
+  onPause,
+  onResume,
+  isRunning,
+  isPaused,
+  canGenerate,
+}: ActionsBarProps) {
+  return (
+    <div className="controls-actions">
+      <button
+        className="btn btn--primary"
+        onClick={onGenerate}
+        disabled={!canGenerate || isRunning}
+        title="Runs DeepDream or Style Transfer on the uploaded image(s) using the current preset and slider settings."
+      >
+        {isRunning ? (isPaused ? 'Paused' : 'Generating…') : 'Generate'}
+      </button>
+      {isRunning && (
+        <button
+          className="btn btn--secondary"
+          onClick={isPaused ? onResume : onPause}
+          title={
+            isPaused
+              ? 'Continues the run from exactly the step where it was paused.'
+              : 'Pauses the run after the current step finishes, so you can resume later from exactly where it left off.'
+          }
+        >
+          {isPaused ? 'Resume' : 'Pause'}
         </button>
-        {isRunning && (
-          <button className="btn btn--secondary" onClick={isPaused ? onResume : onPause}>
-            {isPaused ? 'Resume' : 'Pause'}
-          </button>
-        )}
-        {isRunning && (
-          <button className="btn btn--secondary" onClick={onCancel}>
-            Cancel
-          </button>
-        )}
-      </div>
+      )}
+      {isRunning && (
+        <button
+          className="btn btn--secondary"
+          onClick={onCancel}
+          title="Stops the current run immediately. Progress made on this run will be lost."
+        >
+          Cancel
+        </button>
+      )}
     </div>
   );
 }

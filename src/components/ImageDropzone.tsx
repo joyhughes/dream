@@ -4,11 +4,12 @@ import { ensureBrowserDecodableImage, isHeicFile } from '../ml/imageUtils';
 interface ImageDropzoneProps {
   label: string;
   hint?: string;
+  tooltip?: string;
   onFileSelected: (file: File) => void;
   previewUrl?: string;
 }
 
-export function ImageDropzone({ label, hint, onFileSelected, previewUrl }: ImageDropzoneProps) {
+export function ImageDropzone({ label, hint, tooltip, onFileSelected, previewUrl }: ImageDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
@@ -68,6 +69,7 @@ export function ImageDropzone({ label, hint, onFileSelected, previewUrl }: Image
         onDrop={handleDrop}
         role="button"
         tabIndex={0}
+        title={tooltip}
       >
         {isConverting ? (
           <div className="dropzone-placeholder">
