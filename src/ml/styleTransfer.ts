@@ -3,6 +3,7 @@ import { preprocessForMobilenet } from './imageUtils';
 import { getActivations, type DiscoveredLayer, type FeatureModel } from './mobilenetFeatures';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient, type TileSpec } from './tiledGradient';
+import type { PauseController } from './pauseController';
 import type { StyleParams } from '../types';
 
 export interface StyleTransferProgress {
@@ -18,6 +19,7 @@ export interface RunStyleTransferOptions {
   params: StyleParams;
   onProgress?: (progress: StyleTransferProgress) => void | Promise<void>;
   signal?: AbortSignal;
+  pauseController?: PauseController;
 }
 
 const STYLE_LAYER_FRACTIONS = [0.05, 0.2, 0.4, 0.6, 0.8];
@@ -119,7 +121,7 @@ export async function runStyleTransfer(
   styleImage: tf.Tensor3D,
   options: RunStyleTransferOptions,
 ): Promise<tf.Tensor3D> {
-  const { featureModel, params, onProgress, signal } = options;
+  const { featureModel, params, onProgress, signal, pauseController } = options;
 
   const sorted = [...featureModel.layers].sort((a, b) => a.depthIndex - b.depthIndex);
   const contentLayer = pickLayer(sorted, CONTENT_LAYER_FRACTION);
@@ -175,6 +177,12 @@ export async function runStyleTransfer(
       }
 
       for (let step = 0; step < params.stepsPerOctave; step++) {
+        if (signal?.aborted) {
+          break octaveLoop;
+        }
+
+        await pauseController?.waitIfPaused(signal);
+
         if (signal?.aborted) {
           break octaveLoop;
         }

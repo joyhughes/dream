@@ -40,7 +40,10 @@ interface ControlsPanelProps {
   onStyleParamsChange: (params: StyleParams) => void;
   onGenerate: () => void;
   onCancel: () => void;
+  onPause: () => void;
+  onResume: () => void;
   isRunning: boolean;
+  isPaused: boolean;
   canGenerate: boolean;
 }
 
@@ -55,7 +58,10 @@ export function ControlsPanel({
   onStyleParamsChange,
   onGenerate,
   onCancel,
+  onPause,
+  onResume,
   isRunning,
+  isPaused,
   canGenerate,
 }: ControlsPanelProps) {
   return (
@@ -207,8 +213,13 @@ export function ControlsPanel({
 
       <div className="controls-actions">
         <button className="btn btn--primary" onClick={onGenerate} disabled={!canGenerate || isRunning}>
-          {isRunning ? 'Generating…' : 'Generate'}
+          {isRunning ? (isPaused ? 'Paused' : 'Generating…') : 'Generate'}
         </button>
+        {isRunning && (
+          <button className="btn btn--secondary" onClick={isPaused ? onResume : onPause}>
+            {isPaused ? 'Resume' : 'Pause'}
+          </button>
+        )}
         {isRunning && (
           <button className="btn btn--secondary" onClick={onCancel}>
             Cancel

@@ -12,6 +12,7 @@ import { runDeepDream } from './ml/deepdream';
 import { runStyleTransfer } from './ml/styleTransfer';
 import { imageToWorkingTensor, loadImageFromFile, renderTensorToCanvas } from './ml/imageUtils';
 import { loadLastResultBlob, saveLastResultBlob } from './ml/resultPersistence';
+import { PauseController } from './ml/pauseController';
 import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from './types';
 import { tf } from './ml/tfSetup';
 
@@ -55,9 +56,11 @@ function App() {
   const [hasResult, setHasResult] = useState(false);
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
+  const [isPaused, setIsPaused] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const pauseControllerRef = useRef<PauseController | null>(null);
   const resultTensorRef = useRef<tf.Tensor3D | null>(null);
 
   useEffect(() => {
@@ -151,12 +154,15 @@ function App() {
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    const pauseController = new PauseController();
+    pauseControllerRef.current = pauseController;
 
     let baseTensor: tf.Tensor3D | null = null;
     let templateTensor: tf.Tensor3D | null = null;
 
     try {
       setHasResult(false);
+      setIsPaused(false);
       setEngineStatus({ phase: 'running', step: 0, totalSteps: 1 });
 
       const baseImg = await loadImageFromFile(baseFile);
@@ -175,6 +181,7 @@ function App() {
           preset,
           params: dreamParams,
           signal: controller.signal,
+          pauseController,
           onProgress: async ({ octave, step, image }) => {
             const doneSteps = octave * dreamParams.stepsPerOctave + step;
             setEngineStatus({ phase: 'running', step: doneSteps, totalSteps });
@@ -191,6 +198,7 @@ function App() {
           featureModel,
           params: styleParams,
           signal: controller.signal,
+          pauseController,
           onProgress: async ({ octave, step, image }) => {
             const doneSteps = octave * styleParams.stepsPerOctave + step;
             setEngineStatus({ phase: 'running', step: doneSteps, totalSteps });
@@ -219,12 +227,38 @@ function App() {
       baseTensor?.dispose();
       templateTensor?.dispose();
       abortControllerRef.current = null;
+      pauseControllerRef.current = null;
+      setIsPaused(false);
     }
   }, [baseFile, templateFile, featureModel, mode, presets, selectedPresetId, dreamParams, styleParams]);
 
   const handleCancel = useCallback(() => {
     abortControllerRef.current?.abort();
   }, []);
+
+  const handlePause = useCallback(() => {
+    pauseControllerRef.current?.pause();
+    setIsPaused(true);
+  }, []);
+
+  const handleResume = useCallback(() => {
+    pauseControllerRef.current?.resume();
+    setIsPaused(false);
+  }, []);
+
+  const handleSaveCurrentStep = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `dream-${mode}-step-${Date.now()}.png`;
+      link.click();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }, [mode]);
 
   const handleDownload = useCallback(() => {
     if (!resultBlob) return;
@@ -249,7 +283,17 @@ function App() {
       <ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />
 
       <div className="main-layout">
-        <div className="left-column">
+        <ResultCanvas
+          canvasRef={canvasRef}
+          status={engineStatus}
+          onDownload={handleDownload}
+          onSaveCurrentStep={handleSaveCurrentStep}
+          hasResult={hasResult}
+          resultImageUrl={resultImageUrl}
+          isPaused={isPaused}
+        />
+
+        <div className="sidebar-column">
           <div className="dropzones-row">
             <ImageDropzone
               label="Image to alter"
@@ -281,18 +325,13 @@ function App() {
             onStyleParamsChange={setStyleParams}
             onGenerate={handleGenerate}
             onCancel={handleCancel}
+            onPause={handlePause}
+            onResume={handleResume}
             isRunning={isRunning}
+            isPaused={isPaused}
             canGenerate={canGenerate}
           />
         </div>
-
-        <ResultCanvas
-          canvasRef={canvasRef}
-          status={engineStatus}
-          onDownload={handleDownload}
-          hasResult={hasResult}
-          resultImageUrl={resultImageUrl}
-        />
       </div>
     </>
   );

@@ -3,6 +3,7 @@ import { preprocessForMobilenet } from './imageUtils';
 import { getActivations, type FeatureModel } from './mobilenetFeatures';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient } from './tiledGradient';
+import type { PauseController } from './pauseController';
 import type { DreamParams, DreamPreset } from '../types';
 
 export interface DeepDreamProgress {
@@ -20,6 +21,7 @@ export interface RunDeepDreamOptions {
   previewEvery?: number;
   onProgress?: (progress: DeepDreamProgress) => void | Promise<void>;
   signal?: AbortSignal;
+  pauseController?: PauseController;
 }
 
 function computeLoss(tile: tf.Tensor3D, featureModel: FeatureModel, preset: DreamPreset): tf.Scalar {
@@ -33,7 +35,7 @@ function computeLoss(tile: tf.Tensor3D, featureModel: FeatureModel, preset: Drea
 }
 
 export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDreamOptions): Promise<tf.Tensor3D> {
-  const { featureModel, preset, params, previewEvery = 5, onProgress, signal } = options;
+  const { featureModel, preset, params, previewEvery = 5, onProgress, signal, pauseController } = options;
 
   if (preset.layers.length === 0) {
     throw new Error('Preset has no target layers.');
@@ -52,6 +54,12 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
     current = upscaled;
 
     for (let step = 0; step < params.stepsPerOctave; step++) {
+      if (signal?.aborted) {
+        return current;
+      }
+
+      await pauseController?.waitIfPaused(signal);
+
       if (signal?.aborted) {
         return current;
       }

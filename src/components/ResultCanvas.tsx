@@ -5,11 +5,13 @@ interface ResultCanvasProps {
   canvasRef: RefObject<HTMLCanvasElement>;
   status: EngineStatus;
   onDownload: () => void;
+  onSaveCurrentStep: () => void;
   hasResult: boolean;
   resultImageUrl: string | null;
+  isPaused: boolean;
 }
 
-function statusText(status: EngineStatus): string {
+function statusText(status: EngineStatus, isPaused: boolean): string {
   switch (status.phase) {
     case 'idle':
       return 'Upload images and click Generate.';
@@ -18,7 +20,9 @@ function statusText(status: EngineStatus): string {
     case 'ready':
       return 'Model ready.';
     case 'running':
-      return `Generating… step ${status.step + 1} / ${status.totalSteps}`;
+      return isPaused
+        ? `Paused at step ${status.step + 1} / ${status.totalSteps}`
+        : `Generating… step ${status.step + 1} / ${status.totalSteps}`;
     case 'done':
       return 'Done.';
     case 'error':
@@ -26,13 +30,22 @@ function statusText(status: EngineStatus): string {
   }
 }
 
-export function ResultCanvas({ canvasRef, status, onDownload, hasResult, resultImageUrl }: ResultCanvasProps) {
+export function ResultCanvas({
+  canvasRef,
+  status,
+  onDownload,
+  onSaveCurrentStep,
+  hasResult,
+  resultImageUrl,
+  isPaused,
+}: ResultCanvasProps) {
   const progress = status.phase === 'running' ? (status.step + 1) / status.totalSteps : status.phase === 'done' ? 1 : 0;
 
   // Once a run finishes, the completed result is shown as a plain <img> from a Blob URL instead of the live
   // canvas — a GPU process reset (common after the computer sleeps) can silently wipe a GPU-composited canvas
   // and invalidate the WebGPU device, but a plain image resource doesn't depend on either.
   const showPersistedImage = status.phase !== 'running' && !!resultImageUrl;
+  const canSaveCurrentStep = status.phase === 'running';
 
   return (
     <div className="result-panel">
@@ -45,11 +58,18 @@ export function ResultCanvas({ canvasRef, status, onDownload, hasResult, resultI
       </div>
       <div className="result-status-row">
         <span className={`result-status${status.phase === 'error' ? ' result-status--error' : ''}`}>
-          {statusText(status)}
+          {statusText(status, isPaused)}
         </span>
-        <button className="btn btn--secondary" onClick={onDownload} disabled={!hasResult}>
-          Download PNG
-        </button>
+        <div className="result-status-actions">
+          {canSaveCurrentStep && (
+            <button className="btn btn--secondary" onClick={onSaveCurrentStep}>
+              Save current step
+            </button>
+          )}
+          <button className="btn btn--secondary" onClick={onDownload} disabled={!hasResult}>
+            Download PNG
+          </button>
+        </div>
       </div>
     </div>
   );

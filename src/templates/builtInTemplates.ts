@@ -1,6 +1,8 @@
 import { generatePaisleyPattern } from './paisleyPattern';
 import paisleyColorUrl from '../assets/templates/paisley-color.jpg';
 import paisleyBwUrl from '../assets/templates/paisley-bw.jpg';
+import hongKongUrl from '../assets/templates/hong-kong.jpg';
+import dotPaintingUrl from '../assets/templates/dot-painting.jpg';
 
 export interface BuiltInTemplate {
   id: string;
@@ -47,4 +49,6 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
   staticTemplate('paisley-color', 'Paisley (Color)', paisleyColorUrl, 'paisley-color.jpg'),
   staticTemplate('paisley-bw', 'Paisley (B&W)', paisleyBwUrl, 'paisley-bw.jpg'),
   generatedPaisley,
+  staticTemplate('hong-kong', 'Hong Kong', hongKongUrl, 'hong-kong.jpg'),
+  staticTemplate('dot-painting', 'Dot Painting', dotPaintingUrl, 'dot-painting.jpg'),
 ];
