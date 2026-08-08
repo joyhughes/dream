@@ -27,6 +27,9 @@ body {
   max-width: 1200px;
   margin: 0 auto;
   padding: 2rem 1.5rem 3rem;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .app-header {
@@ -99,8 +102,11 @@ body {
 .main-layout {
   display: grid;
   grid-template-columns: 1fr minmax(520px, 720px);
+  grid-template-rows: minmax(0, 1fr);
   gap: 2rem;
   align-items: start;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 @media (orientation: portrait) {
@@ -352,6 +358,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  align-self: stretch;
+  height: 100%;
+  min-height: 0;
 }
 
 .result-canvas-wrapper {
@@ -363,11 +372,13 @@ body {
   justify-content: center;
   min-height: 320px;
   padding: 0.75rem;
+  flex: 1 1 auto;
 }
 
 .result-canvas {
-  max-width: 100%;
-  max-height: 70vh;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
   border-radius: 6px;
 }
 
