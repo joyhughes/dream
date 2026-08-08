@@ -19,10 +19,10 @@ const DEFAULT_DREAM_PARAMS: DreamParams = {
   octaveScale: 1.4,
   stepsPerOctave: 20,
   stepSize: 0.02,
+  tileSize: 320,
 };
 
 const DEFAULT_STYLE_PARAMS: StyleParams = {
-  imageSize: 224,
   contentWeight: 8,
   styleWeight: 400,
   totalVariationWeight: 1,
@@ -30,6 +30,7 @@ const DEFAULT_STYLE_PARAMS: StyleParams = {
   octaves: 3,
   octaveScale: 1.4,
   stepsPerOctave: 40,
+  tileSize: 320,
 };
 
 function App() {

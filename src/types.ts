@@ -18,10 +18,10 @@ export interface DreamParams {
   octaveScale: number;
   stepsPerOctave: number;
   stepSize: number;
+  tileSize: number;
 }
 
 export interface StyleParams {
-  imageSize: number;
   contentWeight: number;
   styleWeight: number;
   totalVariationWeight: number;
@@ -29,6 +29,7 @@ export interface StyleParams {
   octaves: number;
   octaveScale: number;
   stepsPerOctave: number;
+  tileSize: number;
 }
 
 export interface ProgressUpdate {

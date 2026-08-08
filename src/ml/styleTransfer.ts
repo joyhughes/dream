@@ -2,6 +2,7 @@ import { tf } from './tfSetup';
 import { preprocessForMobilenet } from './imageUtils';
 import { getActivations, type DiscoveredLayer, type FeatureModel } from './mobilenetFeatures';
 import { computeOctaveShapes } from './octaves';
+import { computeTiledGradient, type TileSpec } from './tiledGradient';
 import type { StyleParams } from '../types';
 
 export interface StyleTransferProgress {
@@ -39,47 +40,74 @@ function gramMatrix(activation: tf.Tensor4D): tf.Tensor2D {
 function totalVariationLoss(img: tf.Tensor3D): tf.Scalar {
   return tf.tidy(() => {
     const [h, w] = img.shape;
+    if (h < 2 || w < 2) {
+      return tf.scalar(0);
+    }
     const dx = img.slice([0, 0, 0], [h - 1, w, 3]).sub(img.slice([1, 0, 0], [h - 1, w, 3]));
     const dy = img.slice([0, 0, 0], [h, w - 1, 3]).sub(img.slice([0, 1, 0], [h, w - 1, 3]));
     return (dx.square().mean().add(dy.square().mean())) as tf.Scalar;
   });
 }
 
-/** One Adam step at the generated variable's current resolution. Mutates `generated` in place. */
-function optimizeStep(
+/**
+ * Style statistics (Gram matrices) are translation-invariant texture stats, so a single global target works
+ * fine per tile. Content, on the other hand, is spatially specific — comparing a tile against a single global
+ * content activation would push every tile toward the same content, so each tile is compared against the
+ * matching crop of the content image at this octave's resolution instead.
+ */
+function makeTiledStyleLoss(
+  featureModel: FeatureModel,
+  contentLayer: DiscoveredLayer,
+  styleLayers: DiscoveredLayer[],
+  contentImageAtOctave: tf.Tensor3D,
+  styleGramTargets: tf.Tensor2D[],
+  params: StyleParams,
+) {
+  return (tile: tf.Tensor3D, spec: TileSpec): tf.Scalar => {
+    const batched = preprocessForMobilenet(tile);
+
+    const contentAct = getActivations(featureModel.graphModel, batched, [contentLayer.nodeName])[0];
+    const contentCrop = contentImageAtOctave.slice([spec.y, spec.x, 0], [spec.h, spec.w, 3]);
+    const contentTargetBatched = preprocessForMobilenet(contentCrop);
+    const contentTargetAct = getActivations(featureModel.graphModel, contentTargetBatched, [contentLayer.nodeName])[0];
+    const contentLoss = contentAct.sub(contentTargetAct).square().mean() as tf.Scalar;
+
+    const styleActs = getActivations(featureModel.graphModel, batched, styleLayers.map((l) => l.nodeName));
+    const styleLosses = styleActs.map((act, i) => {
+      const gram = gramMatrix(act as tf.Tensor4D);
+      return gram.sub(styleGramTargets[i]).square().mean() as tf.Scalar;
+    });
+    const styleLoss = styleLosses.reduce((acc, l) => acc.add(l) as tf.Scalar, tf.scalar(0)).div(
+      styleLosses.length,
+    ) as tf.Scalar;
+
+    const tvLoss = totalVariationLoss(tile);
+
+    return contentLoss
+      .mul(params.contentWeight)
+      .add(styleLoss.mul(params.styleWeight))
+      .add(tvLoss.mul(params.totalVariationWeight)) as tf.Scalar;
+  };
+}
+
+/** One Adam step at the generated variable's current resolution, using a tiled gradient. Mutates `generated`. */
+async function optimizeStep(
   generated: tf.Variable,
   optimizer: tf.AdamOptimizer,
   featureModel: FeatureModel,
   contentLayer: DiscoveredLayer,
   styleLayers: DiscoveredLayer[],
-  contentTarget: tf.Tensor,
+  contentImageAtOctave: tf.Tensor3D,
   styleGramTargets: tf.Tensor2D[],
   params: StyleParams,
-): void {
-  optimizer.minimize(() => {
-    return tf.tidy(() => {
-      const batched = preprocessForMobilenet(generated as unknown as tf.Tensor3D, params.imageSize);
+): Promise<void> {
+  const lossFn = makeTiledStyleLoss(featureModel, contentLayer, styleLayers, contentImageAtOctave, styleGramTargets, params);
+  const gradient = await computeTiledGradient(generated as unknown as tf.Tensor3D, params.tileSize, lossFn);
 
-      const contentAct = getActivations(featureModel.graphModel, batched, [contentLayer.nodeName])[0];
-      const contentLoss = contentAct.sub(contentTarget).square().mean() as tf.Scalar;
-
-      const styleActs = getActivations(featureModel.graphModel, batched, styleLayers.map((l) => l.nodeName));
-      const styleLosses = styleActs.map((act, i) => {
-        const gram = gramMatrix(act as tf.Tensor4D);
-        return gram.sub(styleGramTargets[i]).square().mean() as tf.Scalar;
-      });
-      const styleLoss = styleLosses.reduce((acc, l) => acc.add(l) as tf.Scalar, tf.scalar(0)).div(
-        styleLosses.length,
-      ) as tf.Scalar;
-
-      const tvLoss = totalVariationLoss(generated as unknown as tf.Tensor3D);
-
-      return contentLoss
-        .mul(params.contentWeight)
-        .add(styleLoss.mul(params.styleWeight))
-        .add(tvLoss.mul(params.totalVariationWeight)) as tf.Scalar;
-    });
-  }, false, [generated]);
+  // Tiling means accumulating several separate tf.grad() calls into one gradient tensor, which
+  // optimizer.minimize()'s built-in autodiff can't do — applyGradients() lets us hand it a precomputed one.
+  optimizer.applyGradients([{ name: generated.name, tensor: gradient }]);
+  gradient.dispose();
 
   tf.tidy(() => {
     generated.assign(tf.clipByValue(generated, 0, 1));
@@ -106,14 +134,9 @@ export async function runStyleTransfer(
     }
   }
 
-  const contentTarget = tf.tidy(() => {
-    const batched = preprocessForMobilenet(contentImage, params.imageSize);
-    const [act] = getActivations(featureModel.graphModel, batched, [contentLayer.nodeName]);
-    return tf.keep(act.clone());
-  });
-
+  // Style statistics are global and don't depend on octave resolution, so these are computed once up front.
   const styleGramTargets: tf.Tensor2D[] = tf.tidy(() => {
-    const batched = preprocessForMobilenet(styleImage, params.imageSize);
+    const batched = preprocessForMobilenet(styleImage);
     const acts = getActivations(featureModel.graphModel, batched, styleLayers.map((l) => l.nodeName));
     return acts.map((act) => tf.keep(gramMatrix(act as tf.Tensor4D)));
   });
@@ -127,6 +150,9 @@ export async function runStyleTransfer(
     'dream-style-generated',
   );
   let optimizer = tf.train.adam(params.learningRate);
+  let contentImageAtOctave = tf.tidy(
+    () => tf.keep(tf.image.resizeBilinear(contentImage, shapes[0])) as tf.Tensor3D,
+  );
 
   try {
     octaveLoop: for (let octave = 0; octave < shapes.length; octave++) {
@@ -141,6 +167,11 @@ export async function runStyleTransfer(
         // recreated at each octave's resolution, a fresh optimizer avoids reusing wrong-shaped moment tensors.
         optimizer.dispose();
         optimizer = tf.train.adam(params.learningRate);
+
+        contentImageAtOctave.dispose();
+        contentImageAtOctave = tf.tidy(
+          () => tf.keep(tf.image.resizeBilinear(contentImage, [targetH, targetW])) as tf.Tensor3D,
+        );
       }
 
       for (let step = 0; step < params.stepsPerOctave; step++) {
@@ -148,7 +179,16 @@ export async function runStyleTransfer(
           break octaveLoop;
         }
 
-        optimizeStep(generated, optimizer, featureModel, contentLayer, styleLayers, contentTarget, styleGramTargets, params);
+        await optimizeStep(
+          generated,
+          optimizer,
+          featureModel,
+          contentLayer,
+          styleLayers,
+          contentImageAtOctave,
+          styleGramTargets,
+          params,
+        );
 
         if (onProgress && (step % 5 === 0 || step === params.stepsPerOctave - 1)) {
           await onProgress({
@@ -167,7 +207,7 @@ export async function runStyleTransfer(
     return tf.tidy(() => tf.keep(generated.clone())) as tf.Tensor3D;
   } finally {
     generated.dispose();
-    contentTarget.dispose();
+    contentImageAtOctave.dispose();
     styleGramTargets.forEach((g) => g.dispose());
     optimizer.dispose();
   }

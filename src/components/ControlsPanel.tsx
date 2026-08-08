@@ -110,18 +110,22 @@ export function ControlsPanel({
             disabled={isRunning}
             onChange={(v) => onDreamParamsChange({ ...dreamParams, stepSize: v })}
           />
+          <Slider
+            label="Tile size"
+            value={dreamParams.tileSize}
+            min={224}
+            max={512}
+            step={32}
+            disabled={isRunning}
+            onChange={(v) => onDreamParamsChange({ ...dreamParams, tileSize: v })}
+          />
+          <p className="field-hint">
+            Smaller tiles capture more native detail on large images but take longer per step — 224 is the
+            network&apos;s native resolution and gives maximum fidelity.
+          </p>
         </>
       ) : (
         <>
-          <Slider
-            label="Model input size"
-            value={styleParams.imageSize}
-            min={128}
-            max={384}
-            step={32}
-            disabled={isRunning}
-            onChange={(v) => onStyleParamsChange({ ...styleParams, imageSize: v })}
-          />
           <Slider
             label="Content weight"
             value={styleParams.contentWeight}
@@ -185,6 +189,19 @@ export function ControlsPanel({
             disabled={isRunning}
             onChange={(v) => onStyleParamsChange({ ...styleParams, stepsPerOctave: v })}
           />
+          <Slider
+            label="Tile size"
+            value={styleParams.tileSize}
+            min={224}
+            max={512}
+            step={32}
+            disabled={isRunning}
+            onChange={(v) => onStyleParamsChange({ ...styleParams, tileSize: v })}
+          />
+          <p className="field-hint">
+            Smaller tiles capture more native detail on large images but take longer per step — 224 is the
+            network&apos;s native resolution and gives maximum fidelity.
+          </p>
         </>
       )}
 

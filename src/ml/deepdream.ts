@@ -2,6 +2,7 @@ import { tf } from './tfSetup';
 import { preprocessForMobilenet } from './imageUtils';
 import { getActivations, type FeatureModel } from './mobilenetFeatures';
 import { computeOctaveShapes } from './octaves';
+import { computeTiledGradient } from './tiledGradient';
 import type { DreamParams, DreamPreset } from '../types';
 
 export interface DeepDreamProgress {
@@ -16,19 +17,13 @@ export interface RunDeepDreamOptions {
   featureModel: FeatureModel;
   preset: DreamPreset;
   params: DreamParams;
-  modelInputSize?: number;
   previewEvery?: number;
   onProgress?: (progress: DeepDreamProgress) => void | Promise<void>;
   signal?: AbortSignal;
 }
 
-function computeLoss(
-  imgVar: tf.Tensor3D,
-  featureModel: FeatureModel,
-  preset: DreamPreset,
-  modelInputSize: number,
-): tf.Scalar {
-  const batched = preprocessForMobilenet(imgVar, modelInputSize);
+function computeLoss(tile: tf.Tensor3D, featureModel: FeatureModel, preset: DreamPreset): tf.Scalar {
+  const batched = preprocessForMobilenet(tile);
   const nodeNames = preset.layers.map((l) => l.nodeName);
   const activations = getActivations(featureModel.graphModel, batched, nodeNames);
 
@@ -38,7 +33,7 @@ function computeLoss(
 }
 
 export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDreamOptions): Promise<tf.Tensor3D> {
-  const { featureModel, preset, params, modelInputSize = 224, previewEvery = 5, onProgress, signal } = options;
+  const { featureModel, preset, params, previewEvery = 5, onProgress, signal } = options;
 
   if (preset.layers.length === 0) {
     throw new Error('Preset has no target layers.');
@@ -61,17 +56,18 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
         return current;
       }
 
-      const updated = tf.tidy(() => {
-        const lossFn = (x: tf.Tensor) => computeLoss(x as tf.Tensor3D, featureModel, preset, modelInputSize);
-        const gradFn = tf.grad(lossFn);
-        const g = gradFn(current) as tf.Tensor3D;
+      const gradient = await computeTiledGradient(current, params.tileSize, (tile) =>
+        computeLoss(tile, featureModel, preset),
+      );
 
-        const { variance } = tf.moments(g);
+      const updated = tf.tidy(() => {
+        const { variance } = tf.moments(gradient);
         const std = variance.sqrt();
-        const normalized = g.div(std.add(1e-8)) as tf.Tensor3D;
+        const normalized = gradient.div(std.add(1e-8)) as tf.Tensor3D;
 
         return tf.keep(tf.clipByValue(current.add(normalized.mul(params.stepSize)), 0, 1)) as tf.Tensor3D;
       });
+      gradient.dispose();
 
       current.dispose();
       current = updated;
