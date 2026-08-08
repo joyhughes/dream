@@ -1,4 +1,42 @@
-import type { DreamParams, DreamPreset, Mode, StyleParams } from '../types';
+import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from '../types';
+
+function DownloadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 3v12" />
+      <path d="M7 10l5 5 5-5" />
+      <path d="M5 21h14" />
+    </svg>
+  );
+}
+
+function SnapshotIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+      <circle cx="12" cy="14" r="3.3" />
+    </svg>
+  );
+}
+
+function statusText(status: EngineStatus, isPaused: boolean): string {
+  switch (status.phase) {
+    case 'idle':
+      return 'Upload images and click Generate.';
+    case 'loading-model':
+      return 'Loading MobileNet feature model…';
+    case 'ready':
+      return 'Model ready.';
+    case 'running':
+      return isPaused
+        ? `Paused at step ${status.step + 1} / ${status.totalSteps}`
+        : `Generating… step ${status.step + 1} / ${status.totalSteps}`;
+    case 'done':
+      return 'Done.';
+    case 'error':
+      return `Error: ${status.message}`;
+  }
+}
 
 interface SliderProps {
   label: string;
@@ -226,56 +264,93 @@ export function SliderPanel({
 }
 
 interface ActionsBarProps {
+  status: EngineStatus;
+  isPaused: boolean;
+  isRunning: boolean;
+  canGenerate: boolean;
+  hasResult: boolean;
   onGenerate: () => void;
   onCancel: () => void;
   onPause: () => void;
   onResume: () => void;
-  isRunning: boolean;
-  isPaused: boolean;
-  canGenerate: boolean;
+  onDownload: () => void;
+  onSaveCurrentStep: () => void;
 }
 
 export function ActionsBar({
+  status,
+  isPaused,
+  isRunning,
+  canGenerate,
+  hasResult,
   onGenerate,
   onCancel,
   onPause,
   onResume,
-  isRunning,
-  isPaused,
-  canGenerate,
+  onDownload,
+  onSaveCurrentStep,
 }: ActionsBarProps) {
+  const progress = status.phase === 'running' ? (status.step + 1) / status.totalSteps : status.phase === 'done' ? 1 : 0;
+
   return (
-    <div className="controls-actions">
-      <button
-        className="btn btn--primary"
-        onClick={onGenerate}
-        disabled={!canGenerate || isRunning}
-        title="Runs DeepDream or Style Transfer on the uploaded image(s) using the current preset and slider settings."
-      >
-        {isRunning ? (isPaused ? 'Paused' : 'Generating…') : 'Generate'}
-      </button>
-      {isRunning && (
+    <div className="actions-panel">
+      <div className="controls-actions">
         <button
-          className="btn btn--secondary"
-          onClick={isPaused ? onResume : onPause}
-          title={
-            isPaused
-              ? 'Continues the run from exactly the step where it was paused.'
-              : 'Pauses the run after the current step finishes, so you can resume later from exactly where it left off.'
-          }
+          className="btn btn--primary"
+          onClick={onGenerate}
+          disabled={!canGenerate || isRunning}
+          title="Runs DeepDream or Style Transfer on the uploaded image(s) using the current preset and slider settings."
         >
-          {isPaused ? 'Resume' : 'Pause'}
+          {isRunning ? (isPaused ? 'Paused' : 'Generating…') : 'Generate'}
         </button>
-      )}
-      {isRunning && (
+        {isRunning && (
+          <button
+            className="btn btn--secondary"
+            onClick={isPaused ? onResume : onPause}
+            title={
+              isPaused
+                ? 'Continues the run from exactly the step where it was paused.'
+                : 'Pauses the run after the current step finishes, so you can resume later from exactly where it left off.'
+            }
+          >
+            {isPaused ? 'Resume' : 'Pause'}
+          </button>
+        )}
+        {isRunning && (
+          <button
+            className="btn btn--secondary"
+            onClick={onCancel}
+            title="Stops the current run immediately. Progress made on this run will be lost."
+          >
+            Cancel
+          </button>
+        )}
+        {isRunning && (
+          <button
+            className="btn btn--secondary btn--icon"
+            onClick={onSaveCurrentStep}
+            aria-label="Save current step"
+            title="Downloads the current in-progress frame as a PNG without stopping the run."
+          >
+            <SnapshotIcon />
+          </button>
+        )}
         <button
-          className="btn btn--secondary"
-          onClick={onCancel}
-          title="Stops the current run immediately. Progress made on this run will be lost."
+          className="btn btn--secondary btn--icon"
+          onClick={onDownload}
+          disabled={!hasResult}
+          aria-label="Download PNG"
+          title="Downloads the finished result as a PNG file."
         >
-          Cancel
+          <DownloadIcon />
         </button>
-      )}
+      </div>
+      <div className="progress-track">
+        <div className="progress-fill" style={{ width: `${progress * 100}%` }} />
+      </div>
+      <p className={`actions-status-text${status.phase === 'error' ? ' actions-status-text--error' : ''}`}>
+        {statusText(status, isPaused)}
+      </p>
     </div>
   );
 }

@@ -5,7 +5,6 @@ import { ModeTabs } from './components/ModeTabs';
 import { WebGPUStatus } from './components/WebGPUStatus';
 import { PresetPanel, SliderPanel, ActionsBar } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
-import { StatusBar } from './components/StatusBar';
 import { OverlayPanel } from './components/OverlayPanel';
 import { initializeML, type BackendInfo } from './ml/tfSetup';
 import { loadFeatureModel, type FeatureModel } from './ml/mobilenetFeatures';
@@ -277,15 +276,17 @@ function App() {
   const isRunning = engineStatus.phase === 'running';
 
   return (
-    <>
-      <header className="app-header">
-        <h1>Dream</h1>
-        <p>Browser-based DeepDream and neural style transfer, running on your own GPU via WebGPU.</p>
-        <WebGPUStatus info={backendInfo} error={initError} />
-      </header>
+    <div className="stage">
+      <ResultCanvas canvasRef={canvasRef} status={engineStatus} resultImageUrl={resultImageUrl} />
 
-      <div className="stage">
-        <ResultCanvas canvasRef={canvasRef} status={engineStatus} resultImageUrl={resultImageUrl} />
+      <div className="left-stack">
+        <header
+          className="app-header"
+          title="Browser-based DeepDream and neural style transfer, running on your own GPU via WebGPU."
+        >
+          <h1>Dream</h1>
+          <WebGPUStatus info={backendInfo} error={initError} />
+        </header>
 
         <OverlayPanel title="Setup" side="left" open={leftPanelOpen} onToggle={() => setLeftPanelOpen((o) => !o)}>
           <ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />
@@ -312,6 +313,20 @@ function App() {
             )}
           </div>
 
+          <ActionsBar
+            status={engineStatus}
+            isPaused={isPaused}
+            isRunning={isRunning}
+            canGenerate={canGenerate}
+            hasResult={hasResult}
+            onGenerate={handleGenerate}
+            onCancel={handleCancel}
+            onPause={handlePause}
+            onResume={handleResume}
+            onDownload={handleDownload}
+            onSaveCurrentStep={handleSaveCurrentStep}
+          />
+
           <PresetPanel
             mode={mode}
             presets={presets}
@@ -319,38 +334,20 @@ function App() {
             onPresetChange={setSelectedPresetId}
             isRunning={isRunning}
           />
-
-          <ActionsBar
-            onGenerate={handleGenerate}
-            onCancel={handleCancel}
-            onPause={handlePause}
-            onResume={handleResume}
-            isRunning={isRunning}
-            isPaused={isPaused}
-            canGenerate={canGenerate}
-          />
-        </OverlayPanel>
-
-        <OverlayPanel title="Parameters" side="right" open={rightPanelOpen} onToggle={() => setRightPanelOpen((o) => !o)}>
-          <SliderPanel
-            mode={mode}
-            dreamParams={dreamParams}
-            onDreamParamsChange={setDreamParams}
-            styleParams={styleParams}
-            onStyleParamsChange={setStyleParams}
-            isRunning={isRunning}
-          />
         </OverlayPanel>
       </div>
 
-      <StatusBar
-        status={engineStatus}
-        isPaused={isPaused}
-        hasResult={hasResult}
-        onDownload={handleDownload}
-        onSaveCurrentStep={handleSaveCurrentStep}
-      />
-    </>
+      <OverlayPanel title="Parameters" side="right" open={rightPanelOpen} onToggle={() => setRightPanelOpen((o) => !o)}>
+        <SliderPanel
+          mode={mode}
+          dreamParams={dreamParams}
+          onDreamParamsChange={setDreamParams}
+          styleParams={styleParams}
+          onStyleParamsChange={setStyleParams}
+          isRunning={isRunning}
+        />
+      </OverlayPanel>
+    </div>
   );
 }
 
