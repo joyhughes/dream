@@ -5,6 +5,8 @@ import { ModeTabs } from './components/ModeTabs';
 import { WebGPUStatus } from './components/WebGPUStatus';
 import { PresetPanel, SliderPanel, ActionsBar } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
+import { StatusBar } from './components/StatusBar';
+import { OverlayPanel } from './components/OverlayPanel';
 import { initializeML, type BackendInfo } from './ml/tfSetup';
 import { loadFeatureModel, type FeatureModel } from './ml/mobilenetFeatures';
 import { buildPresets } from './ml/presets';
@@ -57,6 +59,8 @@ function App() {
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
+  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -280,76 +284,72 @@ function App() {
         <WebGPUStatus info={backendInfo} error={initError} />
       </header>
 
-      <div className="main-layout">
-        <ResultCanvas
-          canvasRef={canvasRef}
-          status={engineStatus}
-          onDownload={handleDownload}
-          onSaveCurrentStep={handleSaveCurrentStep}
-          hasResult={hasResult}
-          resultImageUrl={resultImageUrl}
-          isPaused={isPaused}
-        />
+      <div className="stage">
+        <ResultCanvas canvasRef={canvasRef} status={engineStatus} resultImageUrl={resultImageUrl} />
 
-        <div className="sidebar-column">
-          <div className="controls-left">
-            <ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />
+        <OverlayPanel title="Setup" side="left" open={leftPanelOpen} onToggle={() => setLeftPanelOpen((o) => !o)}>
+          <ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />
 
-            <div className="dropzones-row">
-              <ImageDropzone
-                label="Image to alter"
-                hint="The photo DeepDream / style transfer will transform"
-                tooltip="The photo that DeepDream or Style Transfer will transform. Drop an image here or click to browse your files."
-                onFileSelected={handleBaseFile}
-                previewUrl={basePreviewUrl}
-              />
-              {mode === 'style' && (
-                <>
-                  <ImageDropzone
-                    label="Dream template (style)"
-                    hint="The image whose style/patterns get imprinted onto the first image"
-                    tooltip="The style image whose colors, textures, and patterns get imprinted onto your photo. Images with strong, distinctive visual patterns tend to work best."
-                    onFileSelected={handleTemplateFile}
-                    previewUrl={templatePreviewUrl}
-                  />
-                  <BuiltInTemplatePicker onSelect={handleTemplateFile} disabled={isRunning} />
-                </>
-              )}
-            </div>
-
-            <PresetPanel
-              mode={mode}
-              presets={presets}
-              selectedPresetId={selectedPresetId}
-              onPresetChange={setSelectedPresetId}
-              isRunning={isRunning}
+          <div className="dropzones-row">
+            <ImageDropzone
+              label="Image to alter"
+              hint="The photo DeepDream / style transfer will transform"
+              tooltip="The photo that DeepDream or Style Transfer will transform. Drop an image here or click to browse your files."
+              onFileSelected={handleBaseFile}
+              previewUrl={basePreviewUrl}
             />
+            {mode === 'style' && (
+              <>
+                <ImageDropzone
+                  label="Dream template (style)"
+                  hint="The image whose style/patterns get imprinted onto the first image"
+                  tooltip="The style image whose colors, textures, and patterns get imprinted onto your photo. Images with strong, distinctive visual patterns tend to work best."
+                  onFileSelected={handleTemplateFile}
+                  previewUrl={templatePreviewUrl}
+                />
+                <BuiltInTemplatePicker onSelect={handleTemplateFile} disabled={isRunning} />
+              </>
+            )}
           </div>
 
-          <div className="controls-right">
-            <SliderPanel
-              mode={mode}
-              dreamParams={dreamParams}
-              onDreamParamsChange={setDreamParams}
-              styleParams={styleParams}
-              onStyleParamsChange={setStyleParams}
-              isRunning={isRunning}
-            />
-          </div>
+          <PresetPanel
+            mode={mode}
+            presets={presets}
+            selectedPresetId={selectedPresetId}
+            onPresetChange={setSelectedPresetId}
+            isRunning={isRunning}
+          />
 
-          <div className="controls-actions-row">
-            <ActionsBar
-              onGenerate={handleGenerate}
-              onCancel={handleCancel}
-              onPause={handlePause}
-              onResume={handleResume}
-              isRunning={isRunning}
-              isPaused={isPaused}
-              canGenerate={canGenerate}
-            />
-          </div>
-        </div>
+          <ActionsBar
+            onGenerate={handleGenerate}
+            onCancel={handleCancel}
+            onPause={handlePause}
+            onResume={handleResume}
+            isRunning={isRunning}
+            isPaused={isPaused}
+            canGenerate={canGenerate}
+          />
+        </OverlayPanel>
+
+        <OverlayPanel title="Parameters" side="right" open={rightPanelOpen} onToggle={() => setRightPanelOpen((o) => !o)}>
+          <SliderPanel
+            mode={mode}
+            dreamParams={dreamParams}
+            onDreamParamsChange={setDreamParams}
+            styleParams={styleParams}
+            onStyleParamsChange={setStyleParams}
+            isRunning={isRunning}
+          />
+        </OverlayPanel>
       </div>
+
+      <StatusBar
+        status={engineStatus}
+        isPaused={isPaused}
+        hasResult={hasResult}
+        onDownload={handleDownload}
+        onSaveCurrentStep={handleSaveCurrentStep}
+      />
     </>
   );
 }

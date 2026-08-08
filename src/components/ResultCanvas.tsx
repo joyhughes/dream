@@ -4,82 +4,19 @@ import type { EngineStatus } from '../types';
 interface ResultCanvasProps {
   canvasRef: RefObject<HTMLCanvasElement>;
   status: EngineStatus;
-  onDownload: () => void;
-  onSaveCurrentStep: () => void;
-  hasResult: boolean;
   resultImageUrl: string | null;
-  isPaused: boolean;
 }
 
-function statusText(status: EngineStatus, isPaused: boolean): string {
-  switch (status.phase) {
-    case 'idle':
-      return 'Upload images and click Generate.';
-    case 'loading-model':
-      return 'Loading MobileNet feature model…';
-    case 'ready':
-      return 'Model ready.';
-    case 'running':
-      return isPaused
-        ? `Paused at step ${status.step + 1} / ${status.totalSteps}`
-        : `Generating… step ${status.step + 1} / ${status.totalSteps}`;
-    case 'done':
-      return 'Done.';
-    case 'error':
-      return `Error: ${status.message}`;
-  }
-}
-
-export function ResultCanvas({
-  canvasRef,
-  status,
-  onDownload,
-  onSaveCurrentStep,
-  hasResult,
-  resultImageUrl,
-  isPaused,
-}: ResultCanvasProps) {
-  const progress = status.phase === 'running' ? (status.step + 1) / status.totalSteps : status.phase === 'done' ? 1 : 0;
-
+export function ResultCanvas({ canvasRef, status, resultImageUrl }: ResultCanvasProps) {
   // Once a run finishes, the completed result is shown as a plain <img> from a Blob URL instead of the live
   // canvas — a GPU process reset (common after the computer sleeps) can silently wipe a GPU-composited canvas
   // and invalidate the WebGPU device, but a plain image resource doesn't depend on either.
   const showPersistedImage = status.phase !== 'running' && !!resultImageUrl;
-  const canSaveCurrentStep = status.phase === 'running';
 
   return (
-    <div className="result-panel">
-      <div className="result-canvas-wrapper">
-        <canvas ref={canvasRef} className="result-canvas" style={showPersistedImage ? { display: 'none' } : undefined} />
-        {showPersistedImage && <img src={resultImageUrl} alt="Result" className="result-canvas" />}
-      </div>
-      <div className="result-progress-track">
-        <div className="result-progress-fill" style={{ width: `${progress * 100}%` }} />
-      </div>
-      <div className="result-status-row">
-        <span className={`result-status${status.phase === 'error' ? ' result-status--error' : ''}`}>
-          {statusText(status, isPaused)}
-        </span>
-        <div className="result-status-actions">
-          {canSaveCurrentStep && (
-            <button
-              className="btn btn--secondary"
-              onClick={onSaveCurrentStep}
-              title="Downloads the current in-progress frame as a PNG without stopping the run."
-            >
-              Save current step
-            </button>
-          )}
-          <button
-            className="btn btn--secondary"
-            onClick={onDownload}
-            disabled={!hasResult}
-            title="Downloads the finished result as a PNG file."
-          >
-            Download PNG
-          </button>
-        </div>
-      </div>
+    <div className="result-stage">
+      <canvas ref={canvasRef} className="result-canvas" style={showPersistedImage ? { display: 'none' } : undefined} />
+      {showPersistedImage && <img src={resultImageUrl} alt="Result" className="result-canvas" />}
     </div>
   );
 }
