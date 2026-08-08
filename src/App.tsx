@@ -11,6 +11,7 @@ import { buildPresets } from './ml/presets';
 import { runDeepDream } from './ml/deepdream';
 import { runStyleTransfer } from './ml/styleTransfer';
 import { imageToWorkingTensor, loadImageFromFile, renderTensorToCanvas } from './ml/imageUtils';
+import { loadLastResultBlob, saveLastResultBlob } from './ml/resultPersistence';
 import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from './types';
 import { tf } from './ml/tfSetup';
 
@@ -52,6 +53,8 @@ function App() {
 
   const [engineStatus, setEngineStatus] = useState<EngineStatus>({ phase: 'loading-model' });
   const [hasResult, setHasResult] = useState(false);
+  const [resultBlob, setResultBlob] = useState<Blob | null>(null);
+  const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -86,6 +89,26 @@ function App() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    (async () => {
+      const blob = await loadLastResultBlob();
+      if (blob) {
+        setResultBlob(blob);
+        setHasResult(true);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!resultBlob) {
+      setResultImageUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(resultBlob);
+    setResultImageUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [resultBlob]);
 
   useEffect(() => {
     return () => {
@@ -176,7 +199,15 @@ function App() {
         });
       }
 
-      if (canvasRef.current) await renderTensorToCanvas(result, canvasRef.current);
+      if (canvasRef.current) {
+        await renderTensorToCanvas(result, canvasRef.current);
+        const canvas = canvasRef.current;
+        canvas.toBlob((blob) => {
+          if (!blob) return;
+          setResultBlob(blob);
+          void saveLastResultBlob(blob);
+        }, 'image/png');
+      }
       resultTensorRef.current?.dispose();
       resultTensorRef.current = result;
       setHasResult(true);
@@ -196,18 +227,14 @@ function App() {
   }, []);
 
   const handleDownload = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `dream-${mode}-${Date.now()}.png`;
-      link.click();
-      URL.revokeObjectURL(url);
-    }, 'image/png');
-  }, [mode]);
+    if (!resultBlob) return;
+    const url = URL.createObjectURL(resultBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `dream-${mode}-${Date.now()}.png`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [resultBlob, mode]);
 
   const isRunning = engineStatus.phase === 'running';
 
@@ -259,7 +286,13 @@ function App() {
           />
         </div>
 
-        <ResultCanvas canvasRef={canvasRef} status={engineStatus} onDownload={handleDownload} hasResult={hasResult} />
+        <ResultCanvas
+          canvasRef={canvasRef}
+          status={engineStatus}
+          onDownload={handleDownload}
+          hasResult={hasResult}
+          resultImageUrl={resultImageUrl}
+        />
       </div>
     </>
   );
