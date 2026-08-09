@@ -239,6 +239,7 @@ function App() {
             const doneSteps = octave * dreamParams.stepsPerOctave + step;
             setEngineStatus({ phase: 'running', step: doneSteps, totalSteps });
             if (canvasRef.current) await renderTensorToCanvas(image, canvasRef.current);
+            movieRecorder?.captureStep();
           },
         });
       } else {
@@ -256,6 +257,7 @@ function App() {
             const doneSteps = octave * styleParams.stepsPerOctave + step;
             setEngineStatus({ phase: 'running', step: doneSteps, totalSteps });
             if (canvasRef.current) await renderTensorToCanvas(image, canvasRef.current);
+            movieRecorder?.captureStep();
           },
         });
       }

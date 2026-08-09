@@ -1,4 +1,3 @@
-const FPS = 24;
 const HOLD_SECONDS = 2;
 
 export function isMovieRecordingSupported(): boolean {
@@ -19,23 +18,27 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Records a movie of a live canvas as it's redrawn during generation: two seconds held on
- * whatever's on the canvas when recording starts, then a continuous mirror of the canvas at a
- * steady frame rate, then two seconds held on the final frame.
+ * Records a movie of a canvas as it's redrawn during generation: two seconds held on whatever's
+ * on the canvas when recording starts, then one video frame per generation step as it completes,
+ * then two seconds held on the final frame.
  *
- * Captures from a dedicated off-screen canvas (mirrored via requestAnimationFrame) rather than
- * the live display canvas directly, so recording is decoupled from the display canvas being
- * resized between octaves or swapped for a persisted <img> once generation finishes.
+ * Captures in manual mode (`captureStream(0)`, advanced only via `track.requestFrame()`) rather
+ * than sampling continuously at a fixed rate — frames land in the recording exactly when a step
+ * actually completes, not on a wall-clock timer, so a slow step doesn't get padded with extra
+ * real-time frames of the same (possibly stale) image, and the two hold periods are exact.
+ *
+ * Captures from a dedicated off-screen canvas rather than the live display canvas directly, so
+ * recording is decoupled from the display canvas being resized between octaves or swapped for a
+ * persisted <img> once generation finishes.
  */
 export class MovieRecorder {
   private recordingCanvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
   private sourceCanvas: HTMLCanvasElement;
   private stream: MediaStream;
+  private track: CanvasCaptureMediaStreamTrack;
   private recorder: MediaRecorder;
   private chunks: Blob[] = [];
-  private rafHandle: number | null = null;
-  private mirroring = false;
 
   constructor(sourceCanvas: HTMLCanvasElement) {
     this.sourceCanvas = sourceCanvas;
@@ -53,7 +56,10 @@ export class MovieRecorder {
     if (!ctx) throw new Error('Could not create a 2D context for movie recording.');
     this.ctx = ctx;
 
-    this.stream = this.recordingCanvas.captureStream(FPS);
+    // frameRequestRate 0 = manual mode: a frame is captured only on an explicit requestFrame() call.
+    this.stream = this.recordingCanvas.captureStream(0);
+    this.track = this.stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
+
     const mimeType = pickSupportedMimeType();
     this.recorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : undefined);
     this.recorder.ondataavailable = (e) => {
@@ -61,30 +67,33 @@ export class MovieRecorder {
     };
   }
 
-  private drawCurrentFrame() {
+  private captureCurrentFrame() {
     this.ctx.drawImage(this.sourceCanvas, 0, 0, this.recordingCanvas.width, this.recordingCanvas.height);
+    this.track.requestFrame();
   }
 
-  private mirrorLoop = () => {
-    if (!this.mirroring) return;
-    this.drawCurrentFrame();
-    this.rafHandle = requestAnimationFrame(this.mirrorLoop);
-  };
-
-  /** Draws the current canvas contents, starts the recorder, and holds for the lead-in period. */
+  /** Captures the current canvas contents, starts the recorder, and holds for the lead-in period. */
   async start(): Promise<void> {
-    this.drawCurrentFrame();
     this.recorder.start();
-    this.mirroring = true;
-    this.rafHandle = requestAnimationFrame(this.mirrorLoop);
+    this.captureCurrentFrame();
     await sleep(HOLD_SECONDS * 1000);
   }
 
-  /** Holds on the final frame, then stops the recorder and resolves with the assembled video. */
+  /** Captures one frame from the current canvas contents — call once per completed generation step. */
+  captureStep(): void {
+    this.captureCurrentFrame();
+  }
+
+  /** Captures the final frame, holds on it for the trailing period, then stops and resolves the video. */
   async finish(): Promise<Blob> {
+    this.captureCurrentFrame();
     await sleep(HOLD_SECONDS * 1000);
-    this.mirroring = false;
-    if (this.rafHandle !== null) cancelAnimationFrame(this.rafHandle);
+    this.captureCurrentFrame();
+
+    // requestFrame() only queues the capture — stopping immediately after can cut the recording
+    // off before the browser has actually processed it, silently dropping this last frame and
+    // truncating the video right before the trailing hold it was supposed to establish.
+    await sleep(150);
 
     const blob = await new Promise<Blob>((resolve) => {
       this.recorder.onstop = () => resolve(new Blob(this.chunks, { type: this.recorder.mimeType || 'video/webm' }));
@@ -97,8 +106,6 @@ export class MovieRecorder {
 
   /** Stops recording immediately and discards the result, e.g. when generation is cancelled. */
   abort(): void {
-    this.mirroring = false;
-    if (this.rafHandle !== null) cancelAnimationFrame(this.rafHandle);
     if (this.recorder.state !== 'inactive') {
       try {
         this.recorder.stop();
