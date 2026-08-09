@@ -6,6 +6,7 @@ import { WebGPUStatus } from './components/WebGPUStatus';
 import { PresetPanel, SliderPanel, ActionsBar } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
 import { OverlayPanel } from './components/OverlayPanel';
+import { HoverPopup } from './components/HoverPopup';
 import { initializeML, type BackendInfo } from './ml/tfSetup';
 import { loadFeatureModel, type FeatureModel } from './ml/mobilenetFeatures';
 import { buildPresets } from './ml/presets';
@@ -14,8 +15,11 @@ import { runStyleTransfer } from './ml/styleTransfer';
 import { imageToWorkingTensor, loadImageFromFile, renderTensorToCanvas } from './ml/imageUtils';
 import { loadLastResultBlob, saveLastResultBlob } from './ml/resultPersistence';
 import { PauseController } from './ml/pauseController';
+import { BUILT_IN_TEMPLATES } from './templates/builtInTemplates';
 import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from './types';
 import { tf } from './ml/tfSetup';
+
+const DEFAULT_TEMPLATE_ID = 'paisley-color';
 
 const DEFAULT_DREAM_PARAMS: DreamParams = {
   octaves: 3,
@@ -143,6 +147,22 @@ function App() {
       return URL.createObjectURL(file);
     });
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const defaultTemplate = BUILT_IN_TEMPLATES.find((t) => t.id === DEFAULT_TEMPLATE_ID);
+      if (!defaultTemplate) return;
+      const file = await defaultTemplate.getFile();
+      if (cancelled) return;
+      handleTemplateFile(file);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [handleTemplateFile]);
 
   const canGenerate =
     engineStatus.phase !== 'loading-model' &&
@@ -300,16 +320,19 @@ function App() {
               previewUrl={basePreviewUrl}
             />
             {mode === 'style' && (
-              <>
-                <ImageDropzone
-                  label="Dream template (style)"
-                  hint="The image whose style/patterns get imprinted onto the first image"
-                  tooltip="The style image whose colors, textures, and patterns get imprinted onto your photo. Images with strong, distinctive visual patterns tend to work best."
-                  onFileSelected={handleTemplateFile}
-                  previewUrl={templatePreviewUrl}
-                />
+              <HoverPopup
+                trigger={
+                  <ImageDropzone
+                    label="Dream template (style)"
+                    hint="The image whose style/patterns get imprinted onto the first image"
+                    tooltip="The style image whose colors, textures, and patterns get imprinted onto your photo. Images with strong, distinctive visual patterns tend to work best. Hover to pick a built-in template."
+                    onFileSelected={handleTemplateFile}
+                    previewUrl={templatePreviewUrl}
+                  />
+                }
+              >
                 <BuiltInTemplatePicker onSelect={handleTemplateFile} disabled={isRunning} />
-              </>
+              </HoverPopup>
             )}
           </div>
 

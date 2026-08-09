@@ -19,6 +19,31 @@ function SnapshotIcon() {
   );
 }
 
+function PauseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+      <rect x="6" y="5" width="4" height="14" rx="1" />
+      <rect x="14" y="5" width="4" height="14" rx="1" />
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+      <path d="M7 5v14l12-7z" />
+    </svg>
+  );
+}
+
+function CancelIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
 function statusText(status: EngineStatus, isPaused: boolean): string {
   switch (status.phase) {
     case 'idle':
@@ -305,24 +330,26 @@ export function ActionsBar({
         </button>
         {isRunning && (
           <button
-            className="btn btn--secondary"
+            className="btn btn--secondary btn--icon"
             onClick={isPaused ? onResume : onPause}
+            aria-label={isPaused ? 'Resume' : 'Pause'}
             title={
               isPaused
                 ? 'Continues the run from exactly the step where it was paused.'
                 : 'Pauses the run after the current step finishes, so you can resume later from exactly where it left off.'
             }
           >
-            {isPaused ? 'Resume' : 'Pause'}
+            {isPaused ? <PlayIcon /> : <PauseIcon />}
           </button>
         )}
         {isRunning && (
           <button
-            className="btn btn--secondary"
+            className="btn btn--secondary btn--icon"
             onClick={onCancel}
+            aria-label="Cancel"
             title="Stops the current run immediately. Progress made on this run will be lost."
           >
-            Cancel
+            <CancelIcon />
           </button>
         )}
         {isRunning && (
