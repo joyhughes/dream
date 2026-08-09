@@ -44,6 +44,14 @@ function CancelIcon() {
   );
 }
 
+function RecordIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="12" r="7" />
+    </svg>
+  );
+}
+
 function statusText(status: EngineStatus, isPaused: boolean): string {
   switch (status.phase) {
     case 'idle':
@@ -294,12 +302,16 @@ interface ActionsBarProps {
   isRunning: boolean;
   canGenerate: boolean;
   hasResult: boolean;
+  recordMovie: boolean;
+  isRecordingMovie: boolean;
+  recordingSupported: boolean;
   onGenerate: () => void;
   onCancel: () => void;
   onPause: () => void;
   onResume: () => void;
   onDownload: () => void;
   onSaveCurrentStep: () => void;
+  onToggleRecordMovie: () => void;
 }
 
 export function ActionsBar({
@@ -308,12 +320,16 @@ export function ActionsBar({
   isRunning,
   canGenerate,
   hasResult,
+  recordMovie,
+  isRecordingMovie,
+  recordingSupported,
   onGenerate,
   onCancel,
   onPause,
   onResume,
   onDownload,
   onSaveCurrentStep,
+  onToggleRecordMovie,
 }: ActionsBarProps) {
   const progress = status.phase === 'running' ? (status.step + 1) / status.totalSteps : status.phase === 'done' ? 1 : 0;
 
@@ -327,6 +343,20 @@ export function ActionsBar({
           title="Runs DeepDream or Style Transfer on the uploaded image(s) using the current preset and slider settings."
         >
           {isRunning ? (isPaused ? 'Paused' : 'Generating…') : 'Generate'}
+        </button>
+        <button
+          className={`btn btn--secondary btn--icon${recordMovie ? ' btn--icon-armed' : ''}`}
+          onClick={onToggleRecordMovie}
+          disabled={isRunning || !recordingSupported}
+          aria-pressed={recordMovie}
+          aria-label="Record movie"
+          title={
+            recordingSupported
+              ? 'When armed, Generate also records a movie of the run: two seconds on the starting image, the full render at a steady frame rate, then two seconds on the final result. Downloads automatically as .webm when done.'
+              : "This browser doesn't support recording canvas video (MediaRecorder / captureStream)."
+          }
+        >
+          <RecordIcon />
         </button>
         {isRunning && (
           <button
@@ -376,6 +406,7 @@ export function ActionsBar({
         <div className="progress-fill" style={{ width: `${progress * 100}%` }} />
       </div>
       <p className={`actions-status-text${status.phase === 'error' ? ' actions-status-text--error' : ''}`}>
+        {isRecordingMovie && <span className="recording-indicator">● REC</span>}
         {statusText(status, isPaused)}
       </p>
     </div>

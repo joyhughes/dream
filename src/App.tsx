@@ -15,11 +15,21 @@ import { runStyleTransfer } from './ml/styleTransfer';
 import { imageToWorkingTensor, loadImageFromFile, renderTensorToCanvas } from './ml/imageUtils';
 import { loadLastResultBlob, saveLastResultBlob } from './ml/resultPersistence';
 import { PauseController } from './ml/pauseController';
+import { MovieRecorder, isMovieRecordingSupported } from './ml/movieRecorder';
 import { BUILT_IN_TEMPLATES } from './templates/builtInTemplates';
 import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from './types';
 import { tf } from './ml/tfSetup';
 
 const DEFAULT_TEMPLATE_ID = 'paisley-color';
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
 
 const DEFAULT_DREAM_PARAMS: DreamParams = {
   octaves: 3,
@@ -64,11 +74,14 @@ function App() {
   const [isPaused, setIsPaused] = useState(false);
   const [leftPanelOpen, setLeftPanelOpen] = useState(true);
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [recordMovie, setRecordMovie] = useState(false);
+  const [isRecordingMovie, setIsRecordingMovie] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pauseControllerRef = useRef<PauseController | null>(null);
   const resultTensorRef = useRef<tf.Tensor3D | null>(null);
+  const movieRecorderRef = useRef<MovieRecorder | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,6 +195,7 @@ function App() {
 
     let baseTensor: tf.Tensor3D | null = null;
     let templateTensor: tf.Tensor3D | null = null;
+    let movieRecorder: MovieRecorder | null = null;
 
     try {
       setHasResult(false);
@@ -190,6 +204,17 @@ function App() {
 
       const baseImg = await loadImageFromFile(baseFile);
       baseTensor = imageToWorkingTensor(baseImg);
+
+      if (canvasRef.current) {
+        await renderTensorToCanvas(baseTensor, canvasRef.current);
+      }
+
+      if (recordMovie && canvasRef.current) {
+        movieRecorder = new MovieRecorder(canvasRef.current);
+        movieRecorderRef.current = movieRecorder;
+        setIsRecordingMovie(true);
+        await movieRecorder.start();
+      }
 
       let result: tf.Tensor3D;
 
@@ -243,6 +268,13 @@ function App() {
       resultTensorRef.current = result;
       setHasResult(true);
       setEngineStatus({ phase: 'done' });
+
+      if (movieRecorder) {
+        const videoBlob = await movieRecorder.finish();
+        movieRecorderRef.current = null;
+        setIsRecordingMovie(false);
+        downloadBlob(videoBlob, `dream-${mode}-movie-${Date.now()}.webm`);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setEngineStatus({ phase: 'error', message });
@@ -252,8 +284,13 @@ function App() {
       abortControllerRef.current = null;
       pauseControllerRef.current = null;
       setIsPaused(false);
+      if (movieRecorderRef.current) {
+        movieRecorderRef.current.abort();
+        movieRecorderRef.current = null;
+      }
+      setIsRecordingMovie(false);
     }
-  }, [baseFile, templateFile, featureModel, mode, presets, selectedPresetId, dreamParams, styleParams]);
+  }, [baseFile, templateFile, featureModel, mode, presets, selectedPresetId, dreamParams, styleParams, recordMovie]);
 
   const handleCancel = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -274,26 +311,17 @@ function App() {
     if (!canvas) return;
     canvas.toBlob((blob) => {
       if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `dream-${mode}-step-${Date.now()}.png`;
-      link.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `dream-${mode}-step-${Date.now()}.png`);
     }, 'image/png');
   }, [mode]);
 
   const handleDownload = useCallback(() => {
     if (!resultBlob) return;
-    const url = URL.createObjectURL(resultBlob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `dream-${mode}-${Date.now()}.png`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(resultBlob, `dream-${mode}-${Date.now()}.png`);
   }, [resultBlob, mode]);
 
   const isRunning = engineStatus.phase === 'running';
+  const recordingSupported = isMovieRecordingSupported();
 
   return (
     <div className="stage">
@@ -342,12 +370,16 @@ function App() {
             isRunning={isRunning}
             canGenerate={canGenerate}
             hasResult={hasResult}
+            recordMovie={recordMovie}
+            isRecordingMovie={isRecordingMovie}
+            recordingSupported={recordingSupported}
             onGenerate={handleGenerate}
             onCancel={handleCancel}
             onPause={handlePause}
             onResume={handleResume}
             onDownload={handleDownload}
             onSaveCurrentStep={handleSaveCurrentStep}
+            onToggleRecordMovie={() => setRecordMovie((r) => !r)}
           />
 
           <PresetPanel

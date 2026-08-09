@@ -344,6 +344,12 @@ body {
   color: #f0908f;
 }
 
+.recording-indicator {
+  color: #ff6b6b;
+  font-weight: 600;
+  margin-right: 0.5em;
+}
+
 .btn {
   border-radius: 8px;
   border: 1px solid transparent;
@@ -387,6 +393,16 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.btn--icon-armed {
+  background: #3a1414;
+  border-color: #e0524f;
+  color: #ff9c9a;
+}
+
+.btn--icon-armed:hover:not(:disabled) {
+  border-color: #ff6b6b;
 }
 
 .result-stage {
