@@ -1,10 +1,12 @@
 const HOLD_SECONDS = 2;
+const STEP_FRAME_MS = 100; // playback pace through the step sequence — fixed, not real generation time
 
 export function isMovieRecordingSupported(): boolean {
   return (
     typeof HTMLCanvasElement !== 'undefined' &&
     'captureStream' in HTMLCanvasElement.prototype &&
-    typeof MediaRecorder !== 'undefined'
+    typeof MediaRecorder !== 'undefined' &&
+    typeof createImageBitmap === 'function'
   );
 }
 
@@ -18,27 +20,24 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Records a movie of a canvas as it's redrawn during generation: two seconds held on whatever's
- * on the canvas when recording starts, then one video frame per generation step as it completes,
- * then two seconds held on the final frame.
+ * Records a movie of a canvas across a generation run, at a pace independent of how long
+ * generation actually took: two seconds held on the starting image, then the sequence of
+ * rendered steps played back at a fixed pace (one step per frame, not real time), then two
+ * seconds held on the final image.
  *
- * Captures in manual mode (`captureStream(0)`, advanced only via `track.requestFrame()`) rather
- * than sampling continuously at a fixed rate — frames land in the recording exactly when a step
- * actually completes, not on a wall-clock timer, so a slow step doesn't get padded with extra
- * real-time frames of the same (possibly stale) image, and the two hold periods are exact.
- *
- * Captures from a dedicated off-screen canvas rather than the live display canvas directly, so
- * recording is decoupled from the display canvas being resized between octaves or swapped for a
- * persisted <img> once generation finishes.
+ * A run can take anywhere from seconds to minutes depending on hardware/backend and settings,
+ * and step timing varies a lot between octaves — encoding live off real capture timestamps would
+ * make the movie exactly as slow and uneven as the run itself. So instead, this collects a cheap
+ * snapshot (an ImageBitmap, not a video frame) of the canvas at each step during generation, and
+ * defers actually encoding the video until `finish()`, which replays the collected snapshots onto
+ * a dedicated off-screen canvas at a fixed rate and captures that.
  */
 export class MovieRecorder {
+  private sourceCanvas: HTMLCanvasElement;
   private recordingCanvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
-  private sourceCanvas: HTMLCanvasElement;
-  private stream: MediaStream;
-  private track: CanvasCaptureMediaStreamTrack;
-  private recorder: MediaRecorder;
-  private chunks: Blob[] = [];
+  private initialFrame: ImageBitmap | null = null;
+  private stepFrames: ImageBitmap[] = [];
 
   constructor(sourceCanvas: HTMLCanvasElement) {
     this.sourceCanvas = sourceCanvas;
@@ -55,69 +54,77 @@ export class MovieRecorder {
     const ctx = this.recordingCanvas.getContext('2d');
     if (!ctx) throw new Error('Could not create a 2D context for movie recording.');
     this.ctx = ctx;
-
-    // frameRequestRate 0 = manual mode: a frame is captured only on an explicit requestFrame() call.
-    this.stream = this.recordingCanvas.captureStream(0);
-    this.track = this.stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
-
-    const mimeType = pickSupportedMimeType();
-    this.recorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : undefined);
-    this.recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) this.chunks.push(e.data);
-    };
   }
 
-  private captureCurrentFrame() {
-    this.ctx.drawImage(this.sourceCanvas, 0, 0, this.recordingCanvas.width, this.recordingCanvas.height);
-    this.track.requestFrame();
-  }
-
-  /** Captures the current canvas contents, starts the recorder, and holds for the lead-in period. */
+  /** Snapshots the current canvas contents as the movie's starting frame. */
   async start(): Promise<void> {
-    this.recorder.start();
-    this.captureCurrentFrame();
-    await sleep(HOLD_SECONDS * 1000);
+    this.initialFrame = await createImageBitmap(this.sourceCanvas);
   }
 
-  /** Captures one frame from the current canvas contents — call once per completed generation step. */
-  captureStep(): void {
-    this.captureCurrentFrame();
+  /** Snapshots the current canvas contents — call once per completed, rendered generation step. */
+  async captureStep(): Promise<void> {
+    this.stepFrames.push(await createImageBitmap(this.sourceCanvas));
   }
 
-  /** Captures the final frame, holds on it for the trailing period, then stops and resolves the video. */
+  /**
+   * Snapshots the final canvas contents, then encodes the whole movie by replaying every
+   * collected snapshot onto the recording canvas at a fixed pace and capturing that — so encoding
+   * itself takes a short, predictable amount of time regardless of how long generation took.
+   */
   async finish(): Promise<Blob> {
-    this.captureCurrentFrame();
-    await sleep(HOLD_SECONDS * 1000);
-    this.captureCurrentFrame();
+    const finalFrame = await createImageBitmap(this.sourceCanvas);
 
-    // requestFrame() only queues the capture — stopping immediately after can cut the recording
-    // off before the browser has actually processed it, silently dropping this last frame and
-    // truncating the video right before the trailing hold it was supposed to establish.
+    const stream = this.recordingCanvas.captureStream(0);
+    const track = stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
+    const mimeType = pickSupportedMimeType();
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+
+    const draw = (bitmap: ImageBitmap) => {
+      this.ctx.drawImage(bitmap, 0, 0, this.recordingCanvas.width, this.recordingCanvas.height);
+      track.requestFrame();
+    };
+
+    recorder.start();
+
+    if (this.initialFrame) draw(this.initialFrame);
+    await sleep(HOLD_SECONDS * 1000);
+
+    for (const frame of this.stepFrames) {
+      draw(frame);
+      await sleep(STEP_FRAME_MS);
+    }
+
+    draw(finalFrame);
+    await sleep(HOLD_SECONDS * 1000);
+    draw(finalFrame);
+    // requestFrame() only queues the capture — stopping immediately after can drop it before the
+    // browser processes it, truncating the recording right before this trailing hold.
     await sleep(150);
 
     const blob = await new Promise<Blob>((resolve) => {
-      this.recorder.onstop = () => resolve(new Blob(this.chunks, { type: this.recorder.mimeType || 'video/webm' }));
-      this.recorder.stop();
+      recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'video/webm' }));
+      recorder.stop();
     });
 
+    finalFrame.close();
     this.cleanup();
     return blob;
   }
 
-  /** Stops recording immediately and discards the result, e.g. when generation is cancelled. */
+  /** Discards everything collected so far without encoding, e.g. when generation is cancelled. */
   abort(): void {
-    if (this.recorder.state !== 'inactive') {
-      try {
-        this.recorder.stop();
-      } catch {
-        // already stopped
-      }
-    }
     this.cleanup();
   }
 
   private cleanup() {
-    this.stream.getTracks().forEach((track) => track.stop());
+    this.initialFrame?.close();
+    this.initialFrame = null;
+    this.stepFrames.forEach((frame) => frame.close());
+    this.stepFrames = [];
     this.recordingCanvas.remove();
   }
 }
