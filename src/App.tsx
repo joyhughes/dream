@@ -7,7 +7,7 @@ import { PresetPanel, SliderPanel, ActionsBar } from './components/ControlsPanel
 import { ResultCanvas } from './components/ResultCanvas';
 import { OverlayPanel } from './components/OverlayPanel';
 import { HoverPopup } from './components/HoverPopup';
-import { initializeML, type BackendInfo } from './ml/tfSetup';
+import { initializeML, ensureBackendHealthy, type BackendInfo } from './ml/tfSetup';
 import { loadFeatureModel, type FeatureModel } from './ml/mobilenetFeatures';
 import { buildPresets } from './ml/presets';
 import { runDeepDream } from './ml/deepdream';
@@ -201,6 +201,11 @@ function App() {
       setHasResult(false);
       setIsPaused(false);
       setEngineStatus({ phase: 'running', step: 0, totalSteps: 1 });
+
+      // A GPU process reset (e.g. after the computer sleeps) can silently invalidate the
+      // WebGPU/WebGL device tfjs is holding, after which ops quietly return zeroed tensors
+      // instead of throwing — recreate the backend up front if that's happened.
+      setBackendInfo(await ensureBackendHealthy());
 
       const baseImg = await loadImageFromFile(baseFile);
       baseTensor = imageToWorkingTensor(baseImg);
