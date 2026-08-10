@@ -24,6 +24,7 @@ export interface RunStyleTransferOptions {
 
 const STYLE_LAYER_FRACTIONS = [0.05, 0.2, 0.4, 0.6, 0.8];
 const CONTENT_LAYER_FRACTION = 0.5;
+const STYLE_CROP_SAMPLES = 4;
 
 function pickLayer(sorted: DiscoveredLayer[], fraction: number): DiscoveredLayer {
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.round(fraction * (sorted.length - 1))));
@@ -92,6 +93,46 @@ function makeTiledStyleLoss(
   };
 }
 
+/**
+ * Content tiles only ever show the network a `tileSize`-pixel crop of the (often much larger)
+ * content image — but if style statistics come from the *whole* template squished down to the
+ * network's 224x224 input, the network is matching "the whole template" against "a small crop of
+ * the content," at two different real-world scales. The optimizer then reproduces the pattern at
+ * whatever size makes those two 224x224 views match statistically, which — since the content crop
+ * covers far fewer native pixels than the whole template did — comes out as many small repeats
+ * instead of one style-sized motif. Sampling several `tileSize`-ish crops of the template instead
+ * (matching the same real-world scale content tiles are seen at, and averaging for stability)
+ * keeps the reproduced pattern close to its size in the original template.
+ */
+function computeStyleGramTargets(
+  featureModel: FeatureModel,
+  styleImage: tf.Tensor3D,
+  styleLayers: DiscoveredLayer[],
+  tileSize: number,
+): tf.Tensor2D[] {
+  return tf.tidy(() => {
+    const [styleH, styleW] = styleImage.shape;
+    const cropDim = Math.min(tileSize, styleH, styleW);
+    const maxY = styleH - cropDim;
+    const maxX = styleW - cropDim;
+
+    const samplesPerLayer: tf.Tensor2D[][] = styleLayers.map(() => []);
+
+    for (let i = 0; i < STYLE_CROP_SAMPLES; i++) {
+      const y = maxY > 0 ? Math.floor(Math.random() * (maxY + 1)) : 0;
+      const x = maxX > 0 ? Math.floor(Math.random() * (maxX + 1)) : 0;
+      const crop = styleImage.slice([y, x, 0], [cropDim, cropDim, 3]) as tf.Tensor3D;
+      const batched = preprocessForMobilenet(crop);
+      const acts = getActivations(featureModel.graphModel, batched, styleLayers.map((l) => l.nodeName));
+      acts.forEach((act, li) => {
+        samplesPerLayer[li].push(gramMatrix(act as tf.Tensor4D));
+      });
+    }
+
+    return samplesPerLayer.map((samples) => tf.keep(tf.stack(samples).mean(0) as tf.Tensor2D));
+  });
+}
+
 /** One Adam step at the generated variable's current resolution, using a tiled gradient. Mutates `generated`. */
 async function optimizeStep(
   generated: tf.Variable,
@@ -136,12 +177,8 @@ export async function runStyleTransfer(
     }
   }
 
-  // Style statistics are global and don't depend on octave resolution, so these are computed once up front.
-  const styleGramTargets: tf.Tensor2D[] = tf.tidy(() => {
-    const batched = preprocessForMobilenet(styleImage);
-    const acts = getActivations(featureModel.graphModel, batched, styleLayers.map((l) => l.nodeName));
-    return acts.map((act) => tf.keep(gramMatrix(act as tf.Tensor4D)));
-  });
+  // Style statistics don't depend on octave resolution, so these are computed once up front.
+  const styleGramTargets = computeStyleGramTargets(featureModel, styleImage, styleLayers, params.tileSize);
 
   const [h, w] = contentImage.shape;
   const shapes = computeOctaveShapes(h, w, params.octaves, params.octaveScale);
