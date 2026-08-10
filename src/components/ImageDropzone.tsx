@@ -7,9 +7,19 @@ interface ImageDropzoneProps {
   tooltip?: string;
   onFileSelected: (file: File) => void;
   previewUrl?: string;
+  previewIsVideo?: boolean;
+  acceptVideo?: boolean;
 }
 
-export function ImageDropzone({ label, hint, tooltip, onFileSelected, previewUrl }: ImageDropzoneProps) {
+export function ImageDropzone({
+  label,
+  hint,
+  tooltip,
+  onFileSelected,
+  previewUrl,
+  previewIsVideo,
+  acceptVideo,
+}: ImageDropzoneProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
@@ -18,13 +28,14 @@ export function ImageDropzone({ label, hint, tooltip, onFileSelected, previewUrl
   const handleFiles = useCallback(
     async (files: FileList | null) => {
       const file = files?.[0];
-      if (!file || !(file.type.startsWith('image/') || isHeicFile(file))) {
+      const isVideo = !!acceptVideo && !!file && file.type.startsWith('video/');
+      if (!file || !(file.type.startsWith('image/') || isHeicFile(file) || isVideo)) {
         return;
       }
 
       setConversionError(null);
 
-      if (!isHeicFile(file)) {
+      if (isVideo || !isHeicFile(file)) {
         onFileSelected(file);
         return;
       }
@@ -46,7 +57,7 @@ export function ImageDropzone({ label, hint, tooltip, onFileSelected, previewUrl
         setIsConverting(false);
       }
     },
-    [onFileSelected],
+    [onFileSelected, acceptVideo],
   );
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -76,10 +87,14 @@ export function ImageDropzone({ label, hint, tooltip, onFileSelected, previewUrl
             <span>Converting HEIC photo…</span>
           </div>
         ) : previewUrl ? (
-          <img src={previewUrl} alt={label} className="dropzone-preview" />
+          previewIsVideo ? (
+            <video src={previewUrl} className="dropzone-preview" muted loop autoPlay playsInline />
+          ) : (
+            <img src={previewUrl} alt={label} className="dropzone-preview" />
+          )
         ) : (
           <div className="dropzone-placeholder">
-            <span>Drop image or click to browse</span>
+            <span>Drop {acceptVideo ? 'image or video' : 'image'} or click to browse</span>
             {hint && <small>{hint}</small>}
             {conversionError && <small className="dropzone-error">{conversionError}</small>}
           </div>
@@ -87,7 +102,7 @@ export function ImageDropzone({ label, hint, tooltip, onFileSelected, previewUrl
         <input
           ref={inputRef}
           type="file"
-          accept="image/*,.heic,.heif,image/heic,image/heif"
+          accept={acceptVideo ? 'image/*,video/*,.heic,.heif,image/heic,image/heif' : 'image/*,.heic,.heif,image/heic,image/heif'}
           hidden
           onChange={(e) => void handleFiles(e.target.files)}
         />

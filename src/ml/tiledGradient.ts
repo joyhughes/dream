@@ -42,15 +42,19 @@ function tileStartPositions(dim: number, tileSize: number): number[] {
 }
 
 export function computeTileGrid(height: number, width: number, tileSize: number): TileSpec[] {
-  const tileH = Math.min(tileSize, height);
-  const tileW = Math.min(tileSize, width);
-  const ys = tileStartPositions(height, tileSize);
-  const xs = tileStartPositions(width, tileSize);
+  // Tiles are always kept square (clamped by whichever of height/width is smaller), even when the
+  // image itself isn't. tf.js's CPU backend has a real bug in its gradient for a non-square
+  // resizeBilinear input (the H/W dims come back transposed) — since every tile gets resized to
+  // the network's square 224x224 input downstream, a non-square tile would trigger it. Square
+  // tiles sidestep that entirely, and as a bonus don't distort the tile's aspect ratio on resize.
+  const tileDim = Math.min(tileSize, height, width);
+  const ys = tileStartPositions(height, tileDim);
+  const xs = tileStartPositions(width, tileDim);
 
   const specs: TileSpec[] = [];
   for (const y of ys) {
     for (const x of xs) {
-      specs.push({ y, x, h: tileH, w: tileW });
+      specs.push({ y, x, h: tileDim, w: tileDim });
     }
   }
   return specs;
@@ -74,11 +78,10 @@ export async function computeTiledGradient(
   lossFn: (tile: tf.Tensor3D, tileSpec: TileSpec) => tf.Scalar,
 ): Promise<tf.Tensor3D> {
   const [h, w] = image.shape;
-  const tileH = Math.min(tileSize, h);
-  const tileW = Math.min(tileSize, w);
+  const tileDim = Math.min(tileSize, h, w);
 
-  const shiftY = Math.floor(Math.random() * tileH);
-  const shiftX = Math.floor(Math.random() * tileW);
+  const shiftY = Math.floor(Math.random() * tileDim);
+  const shiftX = Math.floor(Math.random() * tileDim);
   const rolled = tf.tidy(() => tf.keep(rollImage(image, shiftY, shiftX)) as tf.Tensor3D);
 
   const tiles = computeTileGrid(h, w, tileSize);

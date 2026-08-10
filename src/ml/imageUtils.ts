@@ -57,8 +57,10 @@ export function loadImageFromFile(file: File): Promise<HTMLImageElement> {
   });
 }
 
-/** Decodes an image into a float32 [0,1] HWC tensor, capped to WORKING_MAX_DIMENSION on its longest side. */
-export function imageToWorkingTensor(img: HTMLImageElement): tf.Tensor3D {
+export type FrameSource = HTMLImageElement | HTMLVideoElement | HTMLCanvasElement;
+
+/** Decodes an image (or a positioned video frame) into a float32 [0,1] HWC tensor, capped to WORKING_MAX_DIMENSION on its longest side. */
+export function imageToWorkingTensor(img: FrameSource): tf.Tensor3D {
   return tf.tidy(() => {
     const pixels = tf.browser.fromPixels(img).toFloat().div(255) as tf.Tensor3D;
     const [h, w] = pixels.shape;

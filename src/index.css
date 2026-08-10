@@ -258,7 +258,8 @@ body {
 }
 
 .preset-panel,
-.slider-panel {
+.slider-panel,
+.video-options-panel {
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
@@ -346,6 +347,12 @@ body {
 
 .recording-indicator {
   color: #ff6b6b;
+  font-weight: 600;
+  margin-right: 0.5em;
+}
+
+.frame-progress-indicator {
+  color: #9a9dff;
   font-weight: 600;
   margin-right: 0.5em;
 }

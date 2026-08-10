@@ -132,6 +132,33 @@ export function PresetPanel({ mode, presets, selectedPresetId, onPresetChange, i
   );
 }
 
+interface VideoOptionsPanelProps {
+  fps: number;
+  onFpsChange: (fps: number) => void;
+  isRunning: boolean;
+}
+
+export function VideoOptionsPanel({ fps, onFpsChange, isRunning }: VideoOptionsPanelProps) {
+  return (
+    <div className="video-options-panel">
+      <Slider
+        label="Video frame rate"
+        value={fps}
+        min={1}
+        max={24}
+        step={1}
+        disabled={isRunning}
+        tooltip="How many frames per second to sample from the input video and re-encode the output at. Lower values process far fewer frames (much faster, choppier); higher values are smoother but take proportionally longer since every sampled frame runs the full pipeline below."
+        onChange={onFpsChange}
+      />
+      <p className="field-hint">
+        Each sampled frame runs the full DeepDream / Style Transfer pipeline, so processing a video takes roughly
+        (frame count) × (time for one image).
+      </p>
+    </div>
+  );
+}
+
 interface SliderPanelProps {
   mode: Mode;
   dreamParams: DreamParams;
@@ -305,6 +332,8 @@ interface ActionsBarProps {
   recordMovie: boolean;
   isRecordingMovie: boolean;
   recordingSupported: boolean;
+  recordUnavailableForVideo: boolean;
+  frameProgressLabel?: string | null;
   onGenerate: () => void;
   onCancel: () => void;
   onPause: () => void;
@@ -323,6 +352,8 @@ export function ActionsBar({
   recordMovie,
   isRecordingMovie,
   recordingSupported,
+  recordUnavailableForVideo,
+  frameProgressLabel,
   onGenerate,
   onCancel,
   onPause,
@@ -347,13 +378,15 @@ export function ActionsBar({
         <button
           className={`btn btn--secondary btn--icon${recordMovie ? ' btn--icon-armed' : ''}`}
           onClick={onToggleRecordMovie}
-          disabled={isRunning || !recordingSupported}
+          disabled={isRunning || !recordingSupported || recordUnavailableForVideo}
           aria-pressed={recordMovie}
           aria-label="Record movie"
           title={
-            recordingSupported
-              ? 'When armed, Generate also records a movie of the run: two seconds on the starting image, the full render at a steady frame rate, then two seconds on the final result. Downloads automatically as .webm when done.'
-              : "This browser doesn't support recording canvas video (MediaRecorder / captureStream)."
+            !recordingSupported
+              ? "This browser doesn't support recording canvas video (MediaRecorder / captureStream)."
+              : recordUnavailableForVideo
+                ? "Not available when processing a video — the processed video downloads automatically when it's done."
+                : 'When armed, Generate also records a movie of the run: two seconds on the starting image, the full render at a steady frame rate, then two seconds on the final result. Downloads automatically as .webm when done.'
           }
         >
           <RecordIcon />
@@ -407,6 +440,7 @@ export function ActionsBar({
       </div>
       <p className={`actions-status-text${status.phase === 'error' ? ' actions-status-text--error' : ''}`}>
         {isRecordingMovie && <span className="recording-indicator">● REC</span>}
+        {frameProgressLabel && <span className="frame-progress-indicator">{frameProgressLabel}</span>}
         {statusText(status, isPaused)}
       </p>
     </div>
