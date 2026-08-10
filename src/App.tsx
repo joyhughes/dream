@@ -268,8 +268,8 @@ function App() {
           if (controller.signal.aborted) break;
           setFrameProgress({ index: frameIndex, total: frameCount });
 
-          const videoEl = await videoSource.seekToFrame(frameIndex);
-          const frameTensor = imageToWorkingTensor(videoEl);
+          const frameImage = await videoSource.seekToFrame(frameIndex);
+          const frameTensor = imageToWorkingTensor(frameImage);
 
           const frameResult = await runOnce(frameTensor, frameIndex * stepsPerRun, totalSteps);
           frameTensor.dispose();
