@@ -12,7 +12,8 @@ import { loadFeatureModel, type FeatureModel } from './ml/mobilenetFeatures';
 import { buildPresets } from './ml/presets';
 import { runDeepDream } from './ml/deepdream';
 import { runStyleTransfer } from './ml/styleTransfer';
-import { imageToWorkingTensor, loadImageFromFile, renderTensorToCanvas } from './ml/imageUtils';
+import { imageToWorkingTensor, loadImageFromFile, renderTensorToCanvas, workingDimensions } from './ml/imageUtils';
+import { getDeviceLimits, maxFramesInStore } from './ml/deviceLimits';
 import { loadLastResultBlob, saveLastResultBlob } from './ml/resultPersistence';
 import { PauseController } from './ml/pauseController';
 import { MovieRecorder, isMovieRecordingSupported } from './ml/movieRecorder';
@@ -33,12 +34,15 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+// 320 where there is room for it, less on a phone — see `deviceLimits`.
+const DEFAULT_TILE_SIZE = Math.min(320, getDeviceLimits().maxTileSize);
+
 const DEFAULT_DREAM_PARAMS: DreamParams = {
   octaves: 3,
   octaveScale: 1.4,
   stepsPerOctave: 20,
   stepSize: 0.02,
-  tileSize: 320,
+  tileSize: DEFAULT_TILE_SIZE,
 };
 
 const DEFAULT_STYLE_PARAMS: StyleParams = {
@@ -49,7 +53,7 @@ const DEFAULT_STYLE_PARAMS: StyleParams = {
   octaves: 3,
   octaveScale: 1.4,
   stepsPerOctave: 40,
-  tileSize: 320,
+  tileSize: DEFAULT_TILE_SIZE,
 };
 
 function App() {
@@ -261,7 +265,13 @@ function App() {
 
       if (isBaseVideo) {
         videoSource = await VideoFrameSource.load(baseFile, videoFps);
-        const { frameCount } = videoSource.info;
+
+        // Every processed frame is held as an ImageBitmap until the whole clip is encoded at the end,
+        // so it is the output store — not decoding — that sets how long a clip fits in memory. Process
+        // as much of the clip as that budget holds; the progress label reports the capped count, and a
+        // shortened video is a far better outcome than the tab being killed partway through.
+        const [workingW, workingH] = workingDimensions(videoSource.info.width, videoSource.info.height);
+        const frameCount = Math.min(videoSource.info.frameCount, maxFramesInStore(workingW, workingH));
         const totalSteps = stepsPerRun * frameCount;
 
         for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {

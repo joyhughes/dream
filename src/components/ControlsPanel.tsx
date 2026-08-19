@@ -1,4 +1,9 @@
 import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from '../types';
+import { getDeviceLimits } from '../ml/deviceLimits';
+
+// Matches the cap `computeTiledGradient` enforces, so the slider can't offer a size that is silently
+// clamped on a phone.
+const MAX_TILE_SIZE = getDeviceLimits().maxTileSize;
 
 function DownloadIcon() {
   return (
@@ -224,7 +229,7 @@ export function SliderPanel({
             label="Tile size"
             value={dreamParams.tileSize}
             min={224}
-            max={512}
+            max={MAX_TILE_SIZE}
             step={32}
             disabled={isRunning}
             tooltip="The size of the tiles the image is split into while processing. Smaller tiles capture more native detail on large images but take longer per step — 224 is the network's native resolution and gives maximum fidelity."
@@ -307,7 +312,7 @@ export function SliderPanel({
             label="Tile size"
             value={styleParams.tileSize}
             min={224}
-            max={512}
+            max={MAX_TILE_SIZE}
             step={32}
             disabled={isRunning}
             tooltip="The size of the tiles the image is split into while processing. Smaller tiles capture more native detail on large images but take longer per step — 224 is the network's native resolution and gives maximum fidelity."

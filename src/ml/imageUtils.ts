@@ -1,6 +1,10 @@
 import { tf } from './tfSetup';
+import { getDeviceLimits } from './deviceLimits';
 
-export const WORKING_MAX_DIMENSION = 2048;
+/** Longest side, in pixels, an uploaded image or video frame is worked on at. See `deviceLimits`. */
+export function workingMaxDimension(): number {
+  return getDeviceLimits().workingMaxDimension;
+}
 
 /**
  * This MobileNetV2 build (TF-Hub classification signature, loaded via @tensorflow-models/mobilenet) declares
@@ -59,22 +63,119 @@ export function loadImageFromFile(file: File): Promise<HTMLImageElement> {
 
 export type FrameSource = HTMLImageElement | HTMLVideoElement | HTMLCanvasElement;
 
-/** Decodes an image (or a positioned video frame) into a float32 [0,1] HWC tensor, capped to WORKING_MAX_DIMENSION on its longest side. */
+/** The intrinsic [height, width] of a frame source, which for images and videos is not its layout size. */
+function sourceSize(img: FrameSource): [number, number] {
+  if (img instanceof HTMLVideoElement) {
+    return [img.videoHeight, img.videoWidth];
+  }
+  if (img instanceof HTMLImageElement) {
+    return [img.naturalHeight || img.height, img.naturalWidth || img.width];
+  }
+  return [img.height, img.width];
+}
+
+// Two reusable canvases, ping-ponged between halving steps so a long downscale chain allocates two
+// canvases in total rather than one per step. Safe to reuse across calls because the result is handed
+// straight to `fromPixels` before anything else can ask for a downscale.
+let scratchA: HTMLCanvasElement | null = null;
+let scratchB: HTMLCanvasElement | null = null;
+
+function scratch(second: boolean): HTMLCanvasElement {
+  if (second) {
+    scratchB ??= document.createElement('canvas');
+    return scratchB;
+  }
+  scratchA ??= document.createElement('canvas');
+  return scratchA;
+}
+
+/** Draws `src` into `canvas` at exactly `w`x`h`, with the best downscaling filter the browser offers. */
+function drawTo(canvas: HTMLCanvasElement, src: CanvasImageSource, w: number, h: number): void {
+  // Assigning the size also clears the canvas and resets its context state, so the smoothing hints
+  // below have to be set after it, not once at creation.
+  canvas.width = w;
+  canvas.height = h;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Could not create a 2D context to resize this image.');
+  }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, w, h);
+}
+
+/**
+ * Draws `img` down to fit `maxDim` on its longest side, returning a canvas at the reduced size.
+ *
+ * The point of doing this in canvas-land rather than with `tf.image.resizeBilinear` is that it never
+ * materializes the source at full resolution as a tensor. A 12-megapixel iPhone photo is ~146 MB as a
+ * float32 RGB tensor, and `fromPixels().toFloat().div(255)` holds three of those at once — ~440 MB of
+ * peak allocation just to *open* the photo, before any dreaming starts. That alone is enough to get an
+ * iPhone tab killed. Drawing to a canvas first hands tf.js an image that is already small.
+ *
+ * The reduction is done by repeated halving rather than in one step: a single `drawImage` that shrinks
+ * by more than ~2x point-samples on some browsers (Safari included) instead of averaging, which throws
+ * away most of the detail and aliases hard. Halving stays in the range where the built-in filtering is
+ * an honest box filter, so the last partial step lands on a properly averaged image.
+ */
+function downscaleSource(img: FrameSource, maxDim: number): FrameSource {
+  const [h, w] = sourceSize(img);
+  const longest = Math.max(h, w);
+
+  if (longest === 0 || longest <= maxDim) {
+    return img;
+  }
+
+  const scale = maxDim / longest;
+  const targetH = Math.max(1, Math.round(h * scale));
+  const targetW = Math.max(1, Math.round(w * scale));
+
+  let src: CanvasImageSource = img;
+  let curH = h;
+  let curW = w;
+  let second = false;
+
+  // Runs while a >2x reduction still remains on either axis; the final `drawTo` below covers the rest,
+  // which is by then at most a 2x step. Testing the axes independently matters for very lopsided
+  // sources: a wide, short panorama reaches its target height long before its width, and requiring
+  // both to still be oversized would exit early and leave the width to a single huge, aliased step.
+  // `second` alternates so a step never draws a canvas onto itself.
+  while (curH > targetH * 2 || curW > targetW * 2) {
+    const nextH = Math.max(targetH, Math.round(curH / 2));
+    const nextW = Math.max(targetW, Math.round(curW / 2));
+    const canvas = scratch(second);
+
+    drawTo(canvas, src, nextW, nextH);
+
+    src = canvas;
+    curH = nextH;
+    curW = nextW;
+    second = !second;
+  }
+
+  const out = scratch(second);
+  drawTo(out, src, targetW, targetH);
+  return out;
+}
+
+/** The [width, height] a source of this size ends up being worked on at, after the `workingMaxDimension()` cap. */
+export function workingDimensions(width: number, height: number): [number, number] {
+  const longest = Math.max(width, height);
+  const max = workingMaxDimension();
+
+  if (longest === 0 || longest <= max) {
+    return [width, height];
+  }
+
+  const scale = max / longest;
+  return [Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale))];
+}
+
+/** Decodes an image (or a positioned video frame) into a float32 [0,1] HWC tensor, capped to `workingMaxDimension()` on its longest side. */
 export function imageToWorkingTensor(img: FrameSource): tf.Tensor3D {
-  return tf.tidy(() => {
-    const pixels = tf.browser.fromPixels(img).toFloat().div(255) as tf.Tensor3D;
-    const [h, w] = pixels.shape;
-    const longest = Math.max(h, w);
-
-    if (longest <= WORKING_MAX_DIMENSION) {
-      return tf.keep(pixels);
-    }
-
-    const scale = WORKING_MAX_DIMENSION / longest;
-    const targetH = Math.round(h * scale);
-    const targetW = Math.round(w * scale);
-    return tf.keep(tf.image.resizeBilinear(pixels, [targetH, targetW]));
-  });
+  const source = downscaleSource(img, workingMaxDimension());
+  return tf.tidy(() => tf.browser.fromPixels(source).toFloat().div(255) as tf.Tensor3D);
 }
 
 /**

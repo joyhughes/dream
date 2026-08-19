@@ -1,4 +1,5 @@
 import { tf } from './tfSetup';
+import { getDeviceLimits } from './deviceLimits';
 
 export interface TileSpec {
   y: number;
@@ -74,10 +75,15 @@ export function computeTileGrid(height: number, width: number, tileSize: number)
  */
 export async function computeTiledGradient(
   image: tf.Tensor3D,
-  tileSize: number,
+  requestedTileSize: number,
   lossFn: (tile: tf.Tensor3D, tileSpec: TileSpec) => tf.Scalar,
 ): Promise<tf.Tensor3D> {
   const [h, w] = image.shape;
+
+  // Every tile pass holds a full-image gradient plus the autodiff tape for one tile, and that tape
+  // scales with the tile's area. Capping here rather than at each caller covers both the dream and the
+  // style path, and also catches a too-large tile size restored from a previously saved result.
+  const tileSize = Math.min(requestedTileSize, getDeviceLimits().maxTileSize);
   const tileDim = Math.min(tileSize, h, w);
 
   const shiftY = Math.floor(Math.random() * tileDim);
