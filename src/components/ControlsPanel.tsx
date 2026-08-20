@@ -372,14 +372,16 @@ export function ActionsBar({
   return (
     <div className="actions-panel">
       <div className="controls-actions">
-        <button
-          className="btn btn--primary"
-          onClick={onGenerate}
-          disabled={!canGenerate || isRunning}
-          title="Runs DeepDream or Style Transfer on the uploaded image(s) using the current preset and slider settings."
-        >
-          {isRunning ? (isPaused ? 'Paused' : 'Generating…') : 'Generate'}
-        </button>
+        {!isRunning && (
+          <button
+            className="btn btn--primary"
+            onClick={onGenerate}
+            disabled={!canGenerate}
+            title="Runs DeepDream or Style Transfer on the uploaded image(s) using the current preset and slider settings."
+          >
+            Generate
+          </button>
+        )}
         <button
           className={`btn btn--secondary btn--icon${recordMovie ? ' btn--icon-armed' : ''}`}
           onClick={onToggleRecordMovie}
