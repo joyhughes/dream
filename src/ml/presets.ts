@@ -1,5 +1,5 @@
 import type { DreamPreset } from '../types';
-import type { DiscoveredLayer } from './mobilenetFeatures';
+import type { DiscoveredLayer } from './featureModel';
 
 interface PresetSpec {
   id: string;
