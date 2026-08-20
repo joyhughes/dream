@@ -1,6 +1,5 @@
 import { tf } from './tfSetup';
-import { preprocessForMobilenet } from './imageUtils';
-import { getActivations, type DiscoveredLayer, type FeatureModel } from './mobilenetFeatures';
+import type { DiscoveredLayer, FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient, type TileSpec } from './tiledGradient';
 import type { PauseController } from './pauseController';
@@ -67,15 +66,15 @@ function makeTiledStyleLoss(
   params: StyleParams,
 ) {
   return (tile: tf.Tensor3D, spec: TileSpec): tf.Scalar => {
-    const batched = preprocessForMobilenet(tile);
+    const batched = featureModel.preprocess(tile);
 
-    const contentAct = getActivations(featureModel.graphModel, batched, [contentLayer.nodeName])[0];
+    const contentAct = featureModel.activations(batched, [contentLayer.nodeName])[0];
     const contentCrop = contentImageAtOctave.slice([spec.y, spec.x, 0], [spec.h, spec.w, 3]);
-    const contentTargetBatched = preprocessForMobilenet(contentCrop);
-    const contentTargetAct = getActivations(featureModel.graphModel, contentTargetBatched, [contentLayer.nodeName])[0];
+    const contentTargetBatched = featureModel.preprocess(contentCrop);
+    const contentTargetAct = featureModel.activations(contentTargetBatched, [contentLayer.nodeName])[0];
     const contentLoss = contentAct.sub(contentTargetAct).square().mean() as tf.Scalar;
 
-    const styleActs = getActivations(featureModel.graphModel, batched, styleLayers.map((l) => l.nodeName));
+    const styleActs = featureModel.activations(batched, styleLayers.map((l) => l.nodeName));
     const styleLosses = styleActs.map((act, i) => {
       const gram = gramMatrix(act as tf.Tensor4D);
       return gram.sub(styleGramTargets[i]).square().mean() as tf.Scalar;
@@ -122,8 +121,8 @@ function computeStyleGramTargets(
       const y = maxY > 0 ? Math.floor(Math.random() * (maxY + 1)) : 0;
       const x = maxX > 0 ? Math.floor(Math.random() * (maxX + 1)) : 0;
       const crop = styleImage.slice([y, x, 0], [cropDim, cropDim, 3]) as tf.Tensor3D;
-      const batched = preprocessForMobilenet(crop);
-      const acts = getActivations(featureModel.graphModel, batched, styleLayers.map((l) => l.nodeName));
+      const batched = featureModel.preprocess(crop);
+      const acts = featureModel.activations(batched, styleLayers.map((l) => l.nodeName));
       acts.forEach((act, li) => {
         samplesPerLayer[li].push(gramMatrix(act as tf.Tensor4D));
       });
@@ -165,14 +164,23 @@ export async function runStyleTransfer(
   const { featureModel, params, onProgress, signal, pauseController } = options;
 
   const sorted = [...featureModel.layers].sort((a, b) => a.depthIndex - b.depthIndex);
-  const contentLayer = pickLayer(sorted, CONTENT_LAYER_FRACTION);
+  const byName = new Map(sorted.map((layer) => [layer.nodeName, layer]));
 
-  const styleLayerNames = new Set<string>();
+  // A network that names its own style/content layers (VGG-19 has a well-established set) is taken at its
+  // word; anything else falls back to sampling the discovered layer list by depth.
+  const contentLayer =
+    (featureModel.contentLayerName ? byName.get(featureModel.contentLayerName) : undefined) ??
+    pickLayer(sorted, CONTENT_LAYER_FRACTION);
+
+  const curated = featureModel.styleLayerNames
+    ?.map((name) => byName.get(name))
+    .filter((layer): layer is DiscoveredLayer => layer !== undefined);
+
   const styleLayers: DiscoveredLayer[] = [];
-  for (const fraction of STYLE_LAYER_FRACTIONS) {
-    const layer = pickLayer(sorted, fraction);
-    if (!styleLayerNames.has(layer.nodeName)) {
-      styleLayerNames.add(layer.nodeName);
+  const seen = new Set<string>();
+  for (const layer of curated?.length ? curated : STYLE_LAYER_FRACTIONS.map((f) => pickLayer(sorted, f))) {
+    if (!seen.has(layer.nodeName)) {
+      seen.add(layer.nodeName);
       styleLayers.push(layer);
     }
   }

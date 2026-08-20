@@ -1,6 +1,5 @@
 import { tf } from './tfSetup';
-import { preprocessForMobilenet } from './imageUtils';
-import { getActivations, type FeatureModel } from './mobilenetFeatures';
+import type { FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient } from './tiledGradient';
 import type { PauseController } from './pauseController';
@@ -25,9 +24,9 @@ export interface RunDeepDreamOptions {
 }
 
 function computeLoss(tile: tf.Tensor3D, featureModel: FeatureModel, preset: DreamPreset): tf.Scalar {
-  const batched = preprocessForMobilenet(tile);
+  const batched = featureModel.preprocess(tile);
   const nodeNames = preset.layers.map((l) => l.nodeName);
-  const activations = getActivations(featureModel.graphModel, batched, nodeNames);
+  const activations = featureModel.activations(batched, nodeNames);
 
   const terms = activations.map((act, i) => act.mean().mul(preset.layers[i].weight) as tf.Scalar);
   const total = terms.reduce((acc, t) => acc.add(t) as tf.Scalar, tf.scalar(0));

@@ -8,7 +8,8 @@ import { ResultCanvas } from './components/ResultCanvas';
 import { OverlayPanel } from './components/OverlayPanel';
 import { HoverPopup } from './components/HoverPopup';
 import { initializeML, ensureBackendHealthy, type BackendInfo } from './ml/tfSetup';
-import { loadFeatureModel, type FeatureModel } from './ml/mobilenetFeatures';
+import { loadFeatureModel } from './ml/featureModels';
+import type { FeatureModel, FeatureNetworkId } from './ml/featureModel';
 import { buildPresets } from './ml/presets';
 import { runDeepDream } from './ml/deepdream';
 import { runStyleTransfer } from './ml/styleTransfer';
@@ -21,6 +22,7 @@ import { encodeFrameSequence } from './ml/frameEncoding';
 import { VideoFrameSource } from './ml/videoFrames';
 import { BUILT_IN_TEMPLATES } from './templates/builtInTemplates';
 import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from './types';
+import { FeatureNetworkPicker } from './components/FeatureNetworkPicker';
 import { tf } from './ml/tfSetup';
 
 const DEFAULT_TEMPLATE_ID = 'paisley-color';
@@ -62,6 +64,7 @@ function App() {
   const [backendInfo, setBackendInfo] = useState<BackendInfo | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const [featureModel, setFeatureModel] = useState<FeatureModel | null>(null);
+  const [featureNetworkId, setFeatureNetworkId] = useState<FeatureNetworkId>('mobilenet');
   const [presets, setPresets] = useState<DreamPreset[]>([]);
   const [selectedPresetId, setSelectedPresetId] = useState<string>('');
 
@@ -91,8 +94,15 @@ function App() {
   const resultTensorRef = useRef<tf.Tensor3D | null>(null);
   const movieRecorderRef = useRef<MovieRecorder | null>(null);
 
+  // Re-runs whenever the selected feature network changes: the presets are derived from whichever
+  // network's layers are loaded, so they have to be rebuilt alongside it. Preset ids are stable across
+  // networks, so an existing selection survives the switch.
   useEffect(() => {
     let cancelled = false;
+
+    setFeatureModel(null);
+    setInitError(null);
+    setEngineStatus({ phase: 'loading-model' });
 
     (async () => {
       try {
@@ -100,13 +110,15 @@ function App() {
         if (cancelled) return;
         setBackendInfo(info);
 
-        const model = await loadFeatureModel();
+        const model = await loadFeatureModel(featureNetworkId);
         if (cancelled) return;
         setFeatureModel(model);
 
         const builtPresets = buildPresets(model.layers);
         setPresets(builtPresets);
-        setSelectedPresetId(builtPresets[0]?.id ?? '');
+        setSelectedPresetId((current) =>
+          builtPresets.some((preset) => preset.id === current) ? current : builtPresets[0]?.id ?? '',
+        );
         setEngineStatus({ phase: 'idle' });
       } catch (err) {
         if (cancelled) return;
@@ -119,7 +131,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [featureNetworkId]);
 
   useEffect(() => {
     (async () => {
@@ -468,6 +480,13 @@ function App() {
             onDownload={handleDownload}
             onSaveCurrentStep={handleSaveCurrentStep}
             onToggleRecordMovie={() => setRecordMovie((r) => !r)}
+          />
+
+          <FeatureNetworkPicker
+            value={featureNetworkId}
+            onChange={setFeatureNetworkId}
+            isLoading={!featureModel && !initError}
+            disabled={isRunning}
           />
 
           <PresetPanel

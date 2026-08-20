@@ -6,14 +6,6 @@ export function workingMaxDimension(): number {
   return getDeviceLimits().workingMaxDimension;
 }
 
-/**
- * This MobileNetV2 build (TF-Hub classification signature, loaded via @tensorflow-models/mobilenet) declares
- * a fixed graph input shape of [-1, 224, 224, 3]. Unlike a raw fully-convolutional backbone, GraphModel.execute()
- * rejects any other spatial size outright — this is not a quality/speed tradeoff knob, it cannot be changed
- * without swapping in a different model.
- */
-export const MODEL_INPUT_SIZE = 224;
-
 const HEIC_EXTENSION = /\.hei[cf]$/i;
 const HEIC_MIME_TYPES = new Set(['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence']);
 
@@ -176,18 +168,6 @@ export function workingDimensions(width: number, height: number): [number, numbe
 export function imageToWorkingTensor(img: FrameSource): tf.Tensor3D {
   const source = downscaleSource(img, workingMaxDimension());
   return tf.tidy(() => tf.browser.fromPixels(source).toFloat().div(255) as tf.Tensor3D);
-}
-
-/**
- * Resizes a [0,1] HWC tensor into the NHWC batch MobileNet expects.
- * This build of MobileNetV2 (TF-Hub, alpha 1.0) takes its input already in [0,1], so no rescale is needed.
- * Kept as a distinct differentiable step (not a no-op passthrough) so the gradient path is explicit.
- */
-export function preprocessForMobilenet(image01: tf.Tensor3D): tf.Tensor4D {
-  return tf.tidy(() => {
-    const resized = tf.image.resizeBilinear(image01, [MODEL_INPUT_SIZE, MODEL_INPUT_SIZE]);
-    return resized.expandDims(0) as tf.Tensor4D;
-  });
 }
 
 export async function renderTensorToCanvas(image01: tf.Tensor3D, canvas: HTMLCanvasElement): Promise<void> {
