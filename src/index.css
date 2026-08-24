@@ -400,3 +400,27 @@ body {
     place-items: stretch;
   }
 }
+
+/*
+ * The dock lays its tiles out as a two-column grid, and grid aligns rows across columns: the tall SETUP
+ * tile sets the height of row one, so the PARAMETERS tile below it could not start until SETUP ended,
+ * leaving a large dead band under the actions tile. Multi-column flow gives each column its own vertical
+ * rhythm, so a tile's position depends only on what is above it in its own column.
+ *
+ * The 164px column width matches the grid's old `minmax(164px, 1fr)` track, so the dock keeps breaking to
+ * one column at exactly the same widths it did before; only the row-alignment behaviour changes.
+ */
+.dream-frame .sim-ui-control-tiles {
+  display: block;
+  columns: 2 164px;
+  column-gap: 10px;
+}
+
+.dream-frame .sim-ui-control-tiles > * {
+  break-inside: avoid;
+  margin-bottom: 10px;
+}
+
+.dream-frame .sim-ui-control-tiles > *:last-child {
+  margin-bottom: 0;
+}
