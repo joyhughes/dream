@@ -8,6 +8,8 @@
  * that much in the first place. Every limit here exists to keep a peak allocation off that cliff.
  */
 
+import { isMobileBrowser } from './platform';
+
 interface DeviceLimits {
   /** True for phones/tablets, where the per-tab memory ceiling is low and enforced by process death. */
   memoryConstrained: boolean;
@@ -20,19 +22,15 @@ interface DeviceLimits {
 }
 
 function detectMemoryConstrained(): boolean {
+  if (isMobileBrowser()) {
+    return true;
+  }
+
   if (typeof navigator === 'undefined') {
     return false;
   }
 
-  const ua = navigator.userAgent;
-
-  // iPadOS 13+ reports a desktop Macintosh user agent; a touch-capable "Mac" is the giveaway.
-  const isIOS = /iP(hone|od|ad)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-  if (isIOS || /Android/.test(ua)) {
-    return true;
-  }
-
-  // Not implemented in Safari or Firefox, so this only ever adds detections — never the iOS one above.
+  // Not implemented in Safari or Firefox, so this only ever adds detections — never the mobile one above.
   const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
   return typeof deviceMemory === 'number' && deviceMemory <= 4;
 }

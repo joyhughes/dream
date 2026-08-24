@@ -13,7 +13,14 @@ import { runDeepDream } from './ml/deepdream';
 import { runStyleTransfer } from './ml/styleTransfer';
 import { imageToWorkingTensor, loadImageFromFile, renderTensorToCanvas, workingDimensions } from './ml/imageUtils';
 import { getDeviceLimits, maxFramesInStore } from './ml/deviceLimits';
-import { loadLastResultBlob, saveLastResultBlob } from './ml/resultPersistence';
+import {
+  clearLastResult,
+  loadBaseImage,
+  loadLastResultBlob,
+  saveBaseImage,
+  saveLastResultBlob,
+} from './ml/resultPersistence';
+import { canvasToPngBlob, downloadBlob, saveImage } from './ml/imageSaving';
 import { PauseController } from './ml/pauseController';
 import { MovieRecorder, isMovieRecordingSupported } from './ml/movieRecorder';
 import { encodeFrameSequence } from './ml/frameEncoding';
@@ -25,15 +32,6 @@ import { FeatureNetworkPicker } from './components/FeatureNetworkPicker';
 import { tf } from './ml/tfSetup';
 
 const DEFAULT_TEMPLATE_ID = 'paisley-color';
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-}
 
 // 320 where there is room for it, less on a phone — see `deviceLimits`.
 const DEFAULT_TILE_SIZE = Math.min(320, getDeviceLimits().maxTileSize);
@@ -89,6 +87,9 @@ function App() {
   const pauseControllerRef = useRef<PauseController | null>(null);
   const resultTensorRef = useRef<tf.Tensor3D | null>(null);
   const movieRecorderRef = useRef<MovieRecorder | null>(null);
+  // Whether the user has picked their own image yet, which decides who wins if the restore below
+  // finishes after they've already moved on.
+  const hasOwnBaseImageRef = useRef(false);
 
   // Re-runs whenever the selected feature network changes: the presets are derived from whichever
   // network's layers are loaded, so they have to be rebuilt alongside it. Preset ids are stable across
@@ -128,9 +129,20 @@ function App() {
     };
   }, [featureNetworkId]);
 
+  // iOS discards and reloads a backgrounded tab far more readily than a desktop browser does, and the
+  // picked `File` doesn't survive that. Both halves are restored together or not at all: a result on its
+  // own, with no image beside it, reads as the app having lost the picture and gone back to an older one.
   useEffect(() => {
     (async () => {
+      const base = await loadBaseImage();
+      if (!base) return;
       const blob = await loadLastResultBlob();
+
+      // These reads take long enough on a phone that the user can pick an image first. Theirs wins.
+      if (hasOwnBaseImageRef.current) return;
+
+      setBaseFile(base);
+      setBasePreviewUrl(URL.createObjectURL(base));
       if (blob) {
         setResultBlob(blob);
         setHasResult(true);
@@ -161,11 +173,20 @@ function App() {
   }, [templatePreviewUrl]);
 
   const handleBaseFile = useCallback((file: File) => {
+    hasOwnBaseImageRef.current = true;
     setBaseFile(file);
     setBasePreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
       return URL.createObjectURL(file);
     });
+
+    // A result only means anything next to the image it came from. Dropping the previous one here is
+    // what stops an older run's output from sitting in the viewport on top of a freshly picked image.
+    setResultBlob(null);
+    setHasResult(false);
+    setEngineStatus((status) => (status.phase === 'done' ? { phase: 'idle' } : status));
+    void clearLastResult();
+    void saveBaseImage(file);
   }, []);
 
   const handleTemplateFile = useCallback((file: File) => {
@@ -256,6 +277,9 @@ function App() {
 
     try {
       setHasResult(false);
+      // Cleared for the whole run, not just on success: if this one is cancelled or dies, the viewport
+      // should keep the work in progress rather than fall back to the previous result.
+      setResultBlob(null);
       setIsPaused(false);
       setFrameProgress(null);
       setEngineStatus({ phase: 'running', step: 0, totalSteps: 1 });
@@ -392,18 +416,17 @@ function App() {
     setIsPaused(false);
   }, []);
 
+  // Both save handlers hand off synchronously, keeping the click's user activation alive so `saveImage`
+  // can open the share sheet — the only way onto an iPhone's camera roll.
   const handleSaveCurrentStep = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      downloadBlob(blob, `dream-${mode}-step-${Date.now()}.png`);
-    }, 'image/png');
+    void saveImage(canvasToPngBlob(canvas), `dream-${mode}-step-${Date.now()}.png`);
   }, [mode]);
 
   const handleDownload = useCallback(() => {
     if (!resultBlob) return;
-    downloadBlob(resultBlob, `dream-${mode}-${Date.now()}.png`);
+    void saveImage(resultBlob, `dream-${mode}-${Date.now()}.png`);
   }, [resultBlob, mode]);
 
   const isRunning = engineStatus.phase === 'running';
@@ -418,7 +441,14 @@ function App() {
       controlsLabel="Dream controls"
       viewportLabel="Result"
       actions={<ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />}
-      viewport={<ResultCanvas canvasRef={canvasRef} status={engineStatus} resultImageUrl={resultImageUrl} />}
+      viewport={
+        <ResultCanvas
+          canvasRef={canvasRef}
+          status={engineStatus}
+          resultImageUrl={resultImageUrl}
+          basePreviewUrl={isBaseVideo ? undefined : basePreviewUrl}
+        />
+      }
       controls={
         <>
           <ActionsBar
