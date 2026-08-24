@@ -1,0 +1,362 @@
+.sim-ui-shell {
+  --sim-ui-bg: #f1f4ef;
+  --sim-ui-panel: #ffffff;
+  --sim-ui-panel-soft: rgba(255, 255, 255, 0.78);
+  --sim-ui-ink: #17222a;
+  --sim-ui-muted: #637077;
+  --sim-ui-line: rgba(23, 34, 42, 0.16);
+  --sim-ui-line-strong: rgba(23, 34, 42, 0.28);
+  --sim-ui-accent: #0f7f6f;
+  --sim-ui-accent-contrast: #ffffff;
+  width: 100vw;
+  height: 100svh;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  color: var(--sim-ui-ink);
+  background: var(--sim-ui-bg);
+}
+
+.sim-ui-topbar {
+  min-height: 58px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--sim-ui-line);
+}
+
+.sim-ui-brand h1 {
+  margin: 0;
+  font-size: clamp(24px, 3.8vh, 34px);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.sim-ui-brand p {
+  margin: 7px 0 0;
+  color: var(--sim-ui-muted);
+}
+
+.sim-ui-actions {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sim-ui-workbench {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(296px, 34vw);
+  gap: 12px;
+  padding: 12px;
+}
+
+.sim-ui-stage {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  gap: clamp(5px, 1.2svh, 10px);
+  place-items: center;
+}
+
+.sim-ui-stage.has-stats {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.sim-ui-viewport-frame {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--sim-ui-line-strong);
+  border-radius: 8px;
+  background: var(--sim-ui-panel);
+}
+
+.sim-ui-viewport-frame > * {
+  width: 100%;
+  height: 100%;
+}
+
+.sim-ui-stats-rail {
+  width: min(100%, 860px);
+  min-width: 0;
+}
+
+.sim-ui-control-dock {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--sim-ui-line);
+  border-radius: 8px;
+  background: var(--sim-ui-panel-soft);
+}
+
+.sim-ui-control-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(164px, 1fr));
+  gap: 10px;
+  padding: 10px;
+  align-content: start;
+}
+
+.sim-ui-control-group {
+  min-width: 0;
+  border: 1px solid var(--sim-ui-line);
+  border-radius: 8px;
+  background: var(--sim-ui-panel);
+}
+
+.sim-ui-control-group summary {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 11px;
+  color: var(--sim-ui-ink);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+  user-select: none;
+}
+
+.sim-ui-control-group-body {
+  display: grid;
+  gap: 10px;
+  padding: 0 11px 11px;
+}
+
+.sim-ui-control,
+.sim-ui-select-control {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.sim-ui-control span,
+.sim-ui-select-control span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  color: var(--sim-ui-muted);
+  font-size: 13px;
+}
+
+.sim-ui-control strong {
+  color: var(--sim-ui-ink);
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sim-ui-control input {
+  width: 100%;
+  accent-color: var(--sim-ui-accent);
+}
+
+.sim-ui-control input:disabled,
+.sim-ui-select-control select:disabled {
+  opacity: 0.46;
+}
+
+.sim-ui-select-control select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--sim-ui-line-strong);
+  border-radius: 7px;
+  background: var(--sim-ui-panel);
+  color: var(--sim-ui-ink);
+  padding: 0 10px;
+  font: inherit;
+}
+
+.sim-ui-segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--sim-ui-line-strong);
+  border-radius: 7px;
+  background: var(--sim-ui-panel);
+}
+
+.sim-ui-segmented button {
+  min-width: 0;
+  min-height: 34px;
+  border: 0;
+  border-right: 1px solid var(--sim-ui-line-strong);
+  background: transparent;
+  color: var(--sim-ui-muted);
+  padding: 8px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sim-ui-segmented button:last-child {
+  border-right: 0;
+}
+
+.sim-ui-segmented button.active {
+  background: var(--sim-ui-accent);
+  color: var(--sim-ui-accent-contrast);
+}
+
+.sim-ui-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: var(--sim-ui-ink);
+  font-size: 14px;
+}
+
+.sim-ui-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--sim-ui-accent);
+}
+
+.sim-ui-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 7px;
+}
+
+.sim-ui-stat-item {
+  min-width: 0;
+  border: 1px solid var(--sim-ui-line);
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: var(--sim-ui-panel-soft);
+}
+
+.sim-ui-stat-item span {
+  display: block;
+  color: var(--sim-ui-muted);
+  font-size: 10px;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.sim-ui-stat-item strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--sim-ui-ink);
+  font-size: 18px;
+  line-height: 1.05;
+}
+
+@media (max-aspect-ratio: 6/5) {
+  .sim-ui-workbench {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(156px, 31svh);
+  }
+}
+
+@media (min-aspect-ratio: 5/6) and (max-aspect-ratio: 6/5) {
+  .sim-ui-workbench {
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .sim-ui-control-dock {
+    max-height: 31svh;
+  }
+
+  .sim-ui-control-tiles {
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(148px, 1fr);
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .sim-ui-topbar {
+    align-items: start;
+    flex-direction: column;
+    min-height: 0;
+    gap: 8px;
+    padding: 10px 13px;
+  }
+
+  .sim-ui-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    justify-content: stretch;
+  }
+
+  .sim-ui-actions .sim-ui-segmented {
+    width: 100%;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(92px, 1fr);
+    overflow-x: auto;
+  }
+
+  .sim-ui-actions .sim-ui-segmented button {
+    min-height: 34px;
+    padding: 7px 6px;
+    font-size: 13px;
+  }
+
+  .sim-ui-workbench {
+    padding: 8px;
+    gap: 8px;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .sim-ui-stage {
+    grid-template-rows: auto;
+    align-content: start;
+    place-items: start center;
+  }
+
+  .sim-ui-stage.has-stats {
+    grid-template-rows: auto auto;
+  }
+
+  .sim-ui-control-tiles {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .sim-ui-stats-rail {
+    width: 100%;
+  }
+
+  .sim-ui-stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+    gap: 5px;
+  }
+
+  .sim-ui-stat-item {
+    border-radius: 6px;
+    padding: 5px 6px;
+  }
+
+  .sim-ui-stat-item span {
+    font-size: 8px;
+  }
+
+  .sim-ui-stat-item strong {
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 420px) {
+  .sim-ui-stat-grid {
+    grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  }
+}

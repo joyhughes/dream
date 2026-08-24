@@ -2,12 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ImageDropzone } from './components/ImageDropzone';
 import { BuiltInTemplatePicker } from './components/BuiltInTemplatePicker';
 import { ModeTabs } from './components/ModeTabs';
-import { WebGPUStatus } from './components/WebGPUStatus';
 import { PresetPanel, SliderPanel, VideoOptionsPanel, ActionsBar } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
-import { OverlayPanel } from './components/OverlayPanel';
 import { HoverPopup } from './components/HoverPopup';
-import { initializeML, ensureBackendHealthy, type BackendInfo } from './ml/tfSetup';
+import { initializeML, ensureBackendHealthy } from './ml/tfSetup';
 import { loadFeatureModel } from './ml/featureModels';
 import type { FeatureModel, FeatureNetworkId } from './ml/featureModel';
 import { buildPresets } from './ml/presets';
@@ -22,6 +20,7 @@ import { encodeFrameSequence } from './ml/frameEncoding';
 import { VideoFrameSource } from './ml/videoFrames';
 import { BUILT_IN_TEMPLATES } from './templates/builtInTemplates';
 import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from './types';
+import { AppFrame, ControlGroup } from './simui';
 import { FeatureNetworkPicker } from './components/FeatureNetworkPicker';
 import { tf } from './ml/tfSetup';
 
@@ -61,7 +60,6 @@ const DEFAULT_STYLE_PARAMS: StyleParams = {
 function App() {
   const [mode, setMode] = useState<Mode>('deepdream');
 
-  const [backendInfo, setBackendInfo] = useState<BackendInfo | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
   const [featureModel, setFeatureModel] = useState<FeatureModel | null>(null);
   const [featureNetworkId, setFeatureNetworkId] = useState<FeatureNetworkId>('mobilenet');
@@ -81,8 +79,6 @@ function App() {
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [resultImageUrl, setResultImageUrl] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
-  const [leftPanelOpen, setLeftPanelOpen] = useState(true);
-  const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [recordMovie, setRecordMovie] = useState(false);
   const [isRecordingMovie, setIsRecordingMovie] = useState(false);
   const [videoFps, setVideoFps] = useState(8);
@@ -106,9 +102,8 @@ function App() {
 
     (async () => {
       try {
-        const info = await initializeML();
+        await initializeML();
         if (cancelled) return;
-        setBackendInfo(info);
 
         const model = await loadFeatureModel(featureNetworkId);
         if (cancelled) return;
@@ -268,7 +263,7 @@ function App() {
       // A GPU process reset (e.g. after the computer sleeps) can silently invalidate the
       // WebGPU/WebGL device tfjs is holding, after which ops quietly return zeroed tensors
       // instead of throwing — recreate the backend up front if that's happened.
-      setBackendInfo(await ensureBackendHealthy());
+      await ensureBackendHealthy();
 
       if (mode === 'style') {
         const templateImg = await loadImageFromFile(templateFile!);
@@ -415,53 +410,17 @@ function App() {
   const recordingSupported = isMovieRecordingSupported();
 
   return (
-    <div className="stage">
-      <ResultCanvas canvasRef={canvasRef} status={engineStatus} resultImageUrl={resultImageUrl} />
-
-      <div className="left-stack">
-        <header
-          className="app-header"
-          title="Browser-based DeepDream and neural style transfer, running on your own GPU via WebGPU."
-        >
-          <h1>Dream</h1>
-          <WebGPUStatus info={backendInfo} error={initError} />
-        </header>
-
-        <OverlayPanel title="Setup" side="left" open={leftPanelOpen} onToggle={() => setLeftPanelOpen((o) => !o)}>
-          <ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />
-
-          <div className="dropzones-row">
-            <ImageDropzone
-              label="Image to alter"
-              hint={recordingSupported ? 'The photo or video DeepDream / style transfer will transform' : 'The photo DeepDream / style transfer will transform'}
-              tooltip={
-                recordingSupported
-                  ? "The photo or video that DeepDream or Style Transfer will transform. Drop a file here or click to browse. For a video, every sampled frame runs through the full pipeline and the result downloads as a new video."
-                  : 'The photo that DeepDream or Style Transfer will transform. Drop an image here or click to browse your files.'
-              }
-              onFileSelected={handleBaseFile}
-              previewUrl={basePreviewUrl}
-              previewIsVideo={isBaseVideo}
-              acceptVideo={recordingSupported}
-            />
-            {isBaseVideo && <VideoOptionsPanel fps={videoFps} onFpsChange={setVideoFps} isRunning={isRunning} />}
-            {mode === 'style' && (
-              <HoverPopup
-                trigger={
-                  <ImageDropzone
-                    label="Dream template (style)"
-                    hint="The image whose style/patterns get imprinted onto the first image"
-                    tooltip="The style image whose colors, textures, and patterns get imprinted onto your photo. Images with strong, distinctive visual patterns tend to work best. Hover to pick a built-in template."
-                    onFileSelected={handleTemplateFile}
-                    previewUrl={templatePreviewUrl}
-                  />
-                }
-              >
-                <BuiltInTemplatePicker onSelect={handleTemplateFile} disabled={isRunning} />
-              </HoverPopup>
-            )}
-          </div>
-
+    <AppFrame
+      className="dream-frame"
+      title="Dream by Joyographic"
+      subtitle={initError ?? undefined}
+      viewportFill
+      controlsLabel="Dream controls"
+      viewportLabel="Result"
+      actions={<ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />}
+      viewport={<ResultCanvas canvasRef={canvasRef} status={engineStatus} resultImageUrl={resultImageUrl} />}
+      controls={
+        <>
           <ActionsBar
             status={engineStatus}
             isPaused={isPaused}
@@ -482,34 +441,68 @@ function App() {
             onToggleRecordMovie={() => setRecordMovie((r) => !r)}
           />
 
-          <FeatureNetworkPicker
-            value={featureNetworkId}
-            onChange={setFeatureNetworkId}
-            isLoading={!featureModel && !initError}
-            disabled={isRunning}
-          />
+          <ControlGroup title="Setup">
+            <div className="dropzones-row">
+              <ImageDropzone
+                label="Image to alter"
+                hint={recordingSupported ? 'The photo or video DeepDream / style transfer will transform' : 'The photo DeepDream / style transfer will transform'}
+                tooltip={
+                  recordingSupported
+                    ? "The photo or video that DeepDream or Style Transfer will transform. Drop a file here or click to browse. For a video, every sampled frame runs through the full pipeline and the result downloads as a new video."
+                    : 'The photo that DeepDream or Style Transfer will transform. Drop an image here or click to browse your files.'
+                }
+                onFileSelected={handleBaseFile}
+                previewUrl={basePreviewUrl}
+                previewIsVideo={isBaseVideo}
+                acceptVideo={recordingSupported}
+              />
+              {isBaseVideo && <VideoOptionsPanel fps={videoFps} onFpsChange={setVideoFps} isRunning={isRunning} />}
+              {mode === 'style' && (
+                <HoverPopup
+                  trigger={
+                    <ImageDropzone
+                      label="Dream template (style)"
+                      hint="The image whose style/patterns get imprinted onto the first image"
+                      tooltip="The style image whose colors, textures, and patterns get imprinted onto your photo. Images with strong, distinctive visual patterns tend to work best. Hover to pick a built-in template."
+                      onFileSelected={handleTemplateFile}
+                      previewUrl={templatePreviewUrl}
+                    />
+                  }
+                >
+                  <BuiltInTemplatePicker onSelect={handleTemplateFile} disabled={isRunning} />
+                </HoverPopup>
+              )}
+            </div>
 
-          <PresetPanel
-            mode={mode}
-            presets={presets}
-            selectedPresetId={selectedPresetId}
-            onPresetChange={setSelectedPresetId}
-            isRunning={isRunning}
-          />
-        </OverlayPanel>
-      </div>
+            <FeatureNetworkPicker
+              value={featureNetworkId}
+              onChange={setFeatureNetworkId}
+              isLoading={!featureModel && !initError}
+              disabled={isRunning}
+            />
 
-      <OverlayPanel title="Parameters" side="right" open={rightPanelOpen} onToggle={() => setRightPanelOpen((o) => !o)}>
-        <SliderPanel
-          mode={mode}
-          dreamParams={dreamParams}
-          onDreamParamsChange={setDreamParams}
-          styleParams={styleParams}
-          onStyleParamsChange={setStyleParams}
-          isRunning={isRunning}
-        />
-      </OverlayPanel>
-    </div>
+            <PresetPanel
+              mode={mode}
+              presets={presets}
+              selectedPresetId={selectedPresetId}
+              onPresetChange={setSelectedPresetId}
+              isRunning={isRunning}
+            />
+          </ControlGroup>
+
+          <ControlGroup title="Parameters">
+            <SliderPanel
+              mode={mode}
+              dreamParams={dreamParams}
+              onDreamParamsChange={setDreamParams}
+              styleParams={styleParams}
+              onStyleParamsChange={setStyleParams}
+              isRunning={isRunning}
+            />
+          </ControlGroup>
+        </>
+      }
+    />
   );
 }
 
