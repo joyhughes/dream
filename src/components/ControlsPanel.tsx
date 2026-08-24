@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from '../types';
 import { getDeviceLimits } from '../ml/deviceLimits';
 
@@ -87,18 +88,70 @@ interface SliderProps {
   disabled?: boolean;
 }
 
+/**
+ * Binary floating point leaves artifacts like 0.012000000000000001 once a value has been through
+ * arithmetic. Rounding to 12 significant figures drops those without truncating a precision the user
+ * actually typed, and String() then renders it without trailing zeros.
+ */
+function formatReadout(value: number): string {
+  if (!Number.isFinite(value)) return '';
+  return String(Number(value.toPrecision(12)));
+}
+
 function Slider({ label, value, min, max, step, tooltip, onChange, disabled }: SliderProps) {
+  // While the field is being edited its raw text is authoritative, so partial input a user is midway
+  // through typing — "", "-", "0." — survives instead of being rewritten on every keystroke. Clearing it
+  // on blur hands display back to the committed value, which also normalizes whatever they typed.
+  const [draft, setDraft] = useState<string | null>(null);
+
+  // Typed values are deliberately not clamped, so a slider can be pushed past the range its track offers.
+  // The range input itself cannot represent that, so it is fed a clamped value and pins to the end of its
+  // track; the readout keeps showing the real number and marks itself as out of range.
+  const clamped = Math.min(max, Math.max(min, value));
+  const isOutOfRange = value !== clamped;
+
+  const commit = (text: string) => {
+    const parsed = Number(text.trim());
+    if (text.trim() !== '' && Number.isFinite(parsed)) onChange(parsed);
+    setDraft(null);
+  };
+
   return (
     <label className="slider-row" title={tooltip}>
       <span className="slider-label">
-        {label} <span className="slider-value">{value}</span>
+        {label}
+        <input
+          className={`slider-value${isOutOfRange ? ' slider-value--out-of-range' : ''}`}
+          type="text"
+          inputMode="decimal"
+          aria-label={`${label} value`}
+          value={draft ?? formatReadout(value)}
+          disabled={disabled}
+          onChange={(e) => {
+            const text = e.target.value;
+            setDraft(text);
+            const parsed = Number(text.trim());
+            if (text.trim() !== '' && Number.isFinite(parsed)) onChange(parsed);
+          }}
+          onFocus={(e) => e.target.select()}
+          onBlur={(e) => commit(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              commit(e.currentTarget.value);
+              e.currentTarget.blur();
+            } else if (e.key === 'Escape') {
+              setDraft(null);
+              e.currentTarget.blur();
+            }
+          }}
+        />
       </span>
       <input
         type="range"
         min={min}
         max={max}
         step={step}
-        value={value}
+        value={clamped}
         disabled={disabled}
         onChange={(e) => onChange(Number(e.target.value))}
       />

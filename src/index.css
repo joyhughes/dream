@@ -228,8 +228,35 @@ body {
 }
 
 .slider-value {
+  width: 5.5em;
+  padding: 0 0.25rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
   color: #9a9dff;
+  font: inherit;
   font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.slider-value:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.slider-value:focus {
+  outline: none;
+  border-color: #6a6dff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.slider-value:disabled {
+  opacity: 0.5;
+}
+
+/* The range input pins to the end of its track once a typed value leaves its bounds, so the readout has
+   to be what says the value is still out there. */
+.slider-value--out-of-range {
+  color: #ffb27a;
 }
 
 .slider-row input[type='range'] {
