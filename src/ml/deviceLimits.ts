@@ -15,6 +15,13 @@ interface DeviceLimits {
   memoryConstrained: boolean;
   /** Longest side, in pixels, that an uploaded image or video frame is worked on at. */
   workingMaxDimension: number;
+  /**
+   * The same, for style transfer. Lower, because style transfer holds far more per pixel than DeepDream:
+   * a content target per tile, Gram targets, Adam's two moment tensors, and a tape whose tile pass runs a
+   * deeper slice of the network. DeepDream runs fine on a phone at the full working size; style transfer
+   * was reaching the end of a run and then losing the tab to the final full-resolution GPU readback.
+   */
+  styleWorkingMaxDimension: number;
   /** Upper bound on the tile size used for tiled gradients, regardless of what the slider allows. */
   maxTileSize: number;
   /** Byte budget for the compressed frames held in memory while recording a movie or processing a video. */
@@ -51,12 +58,14 @@ export function getDeviceLimits(): DeviceLimits {
         // full-image tensors alive at once. At 2048 those same tensors are ~38 MB each, which on top of
         // the loaded network is already past what an iPhone tab survives.
         workingMaxDimension: 1024,
+        styleWorkingMaxDimension: 768,
         maxTileSize: 256,
         frameStoreBudgetBytes: 64 * 1024 * 1024,
       }
     : {
         memoryConstrained,
         workingMaxDimension: 2048,
+        styleWorkingMaxDimension: 2048,
         maxTileSize: 512,
         frameStoreBudgetBytes: 256 * 1024 * 1024,
       };

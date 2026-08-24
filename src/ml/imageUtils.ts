@@ -151,10 +151,10 @@ function downscaleSource(img: FrameSource, maxDim: number): FrameSource {
   return out;
 }
 
-/** The [width, height] a source of this size ends up being worked on at, after the `workingMaxDimension()` cap. */
-export function workingDimensions(width: number, height: number): [number, number] {
+/** The [width, height] a source of this size ends up being worked on at, after the working-size cap. */
+export function workingDimensions(width: number, height: number, maxDimension = workingMaxDimension()): [number, number] {
   const longest = Math.max(width, height);
-  const max = workingMaxDimension();
+  const max = maxDimension;
 
   if (longest === 0 || longest <= max) {
     return [width, height];
@@ -164,9 +164,9 @@ export function workingDimensions(width: number, height: number): [number, numbe
   return [Math.max(1, Math.round(width * scale)), Math.max(1, Math.round(height * scale))];
 }
 
-/** Decodes an image (or a positioned video frame) into a float32 [0,1] HWC tensor, capped to `workingMaxDimension()` on its longest side. */
-export function imageToWorkingTensor(img: FrameSource): tf.Tensor3D {
-  const source = downscaleSource(img, workingMaxDimension());
+/** Decodes an image (or a positioned video frame) into a float32 [0,1] HWC tensor, capped on its longest side. */
+export function imageToWorkingTensor(img: FrameSource, maxDimension = workingMaxDimension()): tf.Tensor3D {
+  const source = downscaleSource(img, maxDimension);
   return tf.tidy(() => tf.browser.fromPixels(source).toFloat().div(255) as tf.Tensor3D);
 }
 

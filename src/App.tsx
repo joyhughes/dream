@@ -34,6 +34,13 @@ import { tf } from './ml/tfSetup';
 const DEFAULT_TEMPLATE_ID = 'paisley-color';
 
 /**
+ * How often an in-progress run stores what's on the canvas. A run that dies in its last moments — an iOS
+ * tab kill leaves nothing to catch — otherwise loses everything, and a frame a few steps short of the end
+ * is worth far more than an empty viewport after the reload.
+ */
+const PROGRESS_PERSIST_INTERVAL_MS = 30_000;
+
+/**
  * A GPU that runs out of memory or gets reset mid-run surfaces as whatever low-level call happened to be
  * in flight — on iOS that's Safari's "map async not successful" from a failed buffer readback, which tells
  * the person looking at it nothing about what to do next. The backend is rebuilt on the next run by
@@ -101,8 +108,8 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pauseControllerRef = useRef<PauseController | null>(null);
-  const resultTensorRef = useRef<tf.Tensor3D | null>(null);
   const movieRecorderRef = useRef<MovieRecorder | null>(null);
+  const lastProgressPersistRef = useRef(0);
   // Whether the user has picked their own image yet, which decides who wins if the restore below
   // finishes after they've already moved on.
   const hasOwnBaseImageRef = useRef(false);
@@ -229,6 +236,19 @@ function App() {
     };
   }, [handleTemplateFile]);
 
+  const persistProgressSnapshot = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const now = Date.now();
+    if (now - lastProgressPersistRef.current < PROGRESS_PERSIST_INTERVAL_MS) return;
+    lastProgressPersistRef.current = now;
+
+    canvas.toBlob((blob) => {
+      if (blob) void saveLastResultBlob(blob);
+    }, 'image/png');
+  }, []);
+
   const isBaseVideo = !!baseFile && baseFile.type.startsWith('video/');
 
   const canGenerate =
@@ -273,6 +293,7 @@ function App() {
           onProgress: async ({ octave, step, image }) => {
             setEngineStatus({ phase: 'running', step: stepOffset + octave * dreamParams.stepsPerOctave + step, totalSteps });
             if (canvasRef.current) await renderTensorToCanvas(image, canvasRef.current);
+            persistProgressSnapshot();
             await movieRecorder?.captureStep();
           },
         });
@@ -286,6 +307,7 @@ function App() {
         onProgress: async ({ octave, step, image }) => {
           setEngineStatus({ phase: 'running', step: stepOffset + octave * styleParams.stepsPerOctave + step, totalSteps });
           if (canvasRef.current) await renderTensorToCanvas(image, canvasRef.current);
+          persistProgressSnapshot();
           await movieRecorder?.captureStep();
         },
       });
@@ -293,6 +315,7 @@ function App() {
 
     try {
       setHasResult(false);
+      lastProgressPersistRef.current = Date.now();
       // Cleared for the whole run, not just on success: if this one is cancelled or dies, the viewport
       // should keep the work in progress rather than fall back to the previous result.
       setResultBlob(null);
@@ -305,9 +328,14 @@ function App() {
       // instead of throwing — recreate the backend up front if that's happened.
       await ensureBackendHealthy();
 
+      // Style transfer holds far more per pixel than DeepDream, so on a phone it works at a smaller size —
+      // a finished 768px result beats a 1024px run that takes the tab down with it. See `deviceLimits`.
+      const limits = getDeviceLimits();
+      const workingMax = mode === 'style' ? limits.styleWorkingMaxDimension : limits.workingMaxDimension;
+
       if (mode === 'style') {
         const templateImg = await loadImageFromFile(templateFile!);
-        templateTensor = imageToWorkingTensor(templateImg);
+        templateTensor = imageToWorkingTensor(templateImg, workingMax);
       }
 
       if (isBaseVideo) {
@@ -317,7 +345,7 @@ function App() {
         // so it is the output store — not decoding — that sets how long a clip fits in memory. Process
         // as much of the clip as that budget holds; the progress label reports the capped count, and a
         // shortened video is a far better outcome than the tab being killed partway through.
-        const [workingW, workingH] = workingDimensions(videoSource.info.width, videoSource.info.height);
+        const [workingW, workingH] = workingDimensions(videoSource.info.width, videoSource.info.height, workingMax);
         const frameCount = Math.min(videoSource.info.frameCount, maxFramesInStore(workingW, workingH));
         const totalSteps = stepsPerRun * frameCount;
 
@@ -326,7 +354,7 @@ function App() {
           setFrameProgress({ index: frameIndex, total: frameCount });
 
           const frameImage = await videoSource.seekToFrame(frameIndex);
-          const frameTensor = imageToWorkingTensor(frameImage);
+          const frameTensor = imageToWorkingTensor(frameImage, workingMax);
 
           const frameResult = await runOnce(frameTensor, frameIndex * stepsPerRun, totalSteps);
           frameTensor.dispose();
@@ -350,7 +378,7 @@ function App() {
         setEngineStatus({ phase: 'done' });
       } else {
         const baseImg = await loadImageFromFile(baseFile);
-        baseTensor = imageToWorkingTensor(baseImg);
+        baseTensor = imageToWorkingTensor(baseImg, workingMax);
 
         if (canvasRef.current) {
           await renderTensorToCanvas(baseTensor, canvasRef.current);
@@ -366,16 +394,25 @@ function App() {
         const result = await runOnce(baseTensor, 0, stepsPerRun);
 
         if (canvasRef.current) {
-          await renderTensorToCanvas(result, canvasRef.current);
           const canvas = canvasRef.current;
+          try {
+            await renderTensorToCanvas(result, canvas);
+          } catch (err) {
+            // The largest single GPU->CPU transfer of the run, and so the likeliest thing to fail on a
+            // phone that is nearly out of memory. The canvas still holds the last progress frame, a few
+            // steps short of the finished image — worth keeping rather than failing the whole run.
+            console.warn('Final render failed; keeping the last frame already on the canvas.', err);
+          }
           canvas.toBlob((blob) => {
             if (!blob) return;
             setResultBlob(blob);
             void saveLastResultBlob(blob);
           }, 'image/png');
         }
-        resultTensorRef.current?.dispose();
-        resultTensorRef.current = result;
+        // Nothing reads the finished tensor once it's on the canvas and encoded to a PNG — and it is a
+        // full-resolution float32 buffer, so holding it kept a run's worth of GPU memory alive right
+        // through the next run.
+        result.dispose();
         setHasResult(true);
         setEngineStatus({ phase: 'done' });
 
@@ -416,6 +453,7 @@ function App() {
     recordMovie,
     isBaseVideo,
     videoFps,
+    persistProgressSnapshot,
   ]);
 
   const handleCancel = useCallback(() => {
