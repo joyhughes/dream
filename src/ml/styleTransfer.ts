@@ -1,7 +1,7 @@
 import { tf } from './tfSetup';
 import type { DiscoveredLayer, FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
-import { computeTiledGradient, type TileSpec } from './tiledGradient';
+import { computeTiledGradient, computeTileGrid, effectiveTileSize, type TileSpec } from './tiledGradient';
 import type { PauseController } from './pauseController';
 import type { StyleParams } from '../types';
 
@@ -51,6 +51,41 @@ function totalVariationLoss(img: tf.Tensor3D): tf.Scalar {
   });
 }
 
+function tileKey(spec: TileSpec): string {
+  return `${spec.y}:${spec.x}:${spec.h}:${spec.w}`;
+}
+
+/**
+ * The content activation each tile is pulled toward. It depends only on the content image and the tile
+ * grid, so within an octave it is the same on every step — computed once here rather than on every step,
+ * and, more importantly, computed outside the gradient tape. Inside it, this is a second network pass
+ * whose intermediates are all held for a backward pass that never needs them, which roughly doubles what
+ * a tile pass costs; that is what put style transfer over an iPhone's memory ceiling while DeepDream,
+ * which only ever runs one pass, stayed under it.
+ */
+function computeContentTargets(
+  featureModel: FeatureModel,
+  contentLayer: DiscoveredLayer,
+  contentImageAtOctave: tf.Tensor3D,
+  tileSize: number,
+): Map<string, tf.Tensor> {
+  const [h, w] = contentImageAtOctave.shape;
+  const specs = computeTileGrid(h, w, effectiveTileSize(tileSize, h, w));
+  const targets = new Map<string, tf.Tensor>();
+
+  for (const spec of specs) {
+    // A scope per tile, so only the one activation being kept outlives each pass.
+    tf.tidy(() => {
+      const crop = contentImageAtOctave.slice([spec.y, spec.x, 0], [spec.h, spec.w, 3]) as tf.Tensor3D;
+      const batched = featureModel.preprocess(crop);
+      const act = featureModel.activations(batched, [contentLayer.nodeName])[0];
+      targets.set(tileKey(spec), tf.keep(act));
+    });
+  }
+
+  return targets;
+}
+
 /**
  * Style statistics (Gram matrices) are translation-invariant texture stats, so a single global target works
  * fine per tile. Content, on the other hand, is spatially specific — comparing a tile against a single global
@@ -61,21 +96,31 @@ function makeTiledStyleLoss(
   featureModel: FeatureModel,
   contentLayer: DiscoveredLayer,
   styleLayers: DiscoveredLayer[],
-  contentImageAtOctave: tf.Tensor3D,
+  contentTargets: Map<string, tf.Tensor>,
   styleGramTargets: tf.Tensor2D[],
   params: StyleParams,
 ) {
+  // Content and style activations come out of a single pass over the tile. Asking for them separately
+  // ran the whole network twice per tile, since a feature model executes the graph once per call.
+  const requestNames = Array.from(new Set([contentLayer.nodeName, ...styleLayers.map((l) => l.nodeName)]));
+  const indexOfName = new Map(requestNames.map((name, index) => [name, index]));
+
   return (tile: tf.Tensor3D, spec: TileSpec): tf.Scalar => {
     const batched = featureModel.preprocess(tile);
+    const acts = featureModel.activations(batched, requestNames);
 
-    const contentAct = featureModel.activations(batched, [contentLayer.nodeName])[0];
-    const contentCrop = contentImageAtOctave.slice([spec.y, spec.x, 0], [spec.h, spec.w, 3]);
-    const contentTargetBatched = featureModel.preprocess(contentCrop);
-    const contentTargetAct = featureModel.activations(contentTargetBatched, [contentLayer.nodeName])[0];
-    const contentLoss = contentAct.sub(contentTargetAct).square().mean() as tf.Scalar;
+    const contentTarget = contentTargets.get(tileKey(spec));
+    if (!contentTarget) {
+      // Both grids come from computeTileGrid on the same dimensions, so this can only mean they've
+      // drifted apart in code — worth saying plainly rather than failing inside an arithmetic op.
+      throw new Error(`No content target for tile ${tileKey(spec)}; tile grid and content targets disagree.`);
+    }
 
-    const styleActs = featureModel.activations(batched, styleLayers.map((l) => l.nodeName));
-    const styleLosses = styleActs.map((act, i) => {
+    const contentAct = acts[indexOfName.get(contentLayer.nodeName)!];
+    const contentLoss = contentAct.sub(contentTarget).square().mean() as tf.Scalar;
+
+    const styleLosses = styleLayers.map((layer, i) => {
+      const act = acts[indexOfName.get(layer.nodeName)!];
       const gram = gramMatrix(act as tf.Tensor4D);
       return gram.sub(styleGramTargets[i]).square().mean() as tf.Scalar;
     });
@@ -109,26 +154,34 @@ function computeStyleGramTargets(
   styleLayers: DiscoveredLayer[],
   tileSize: number,
 ): tf.Tensor2D[] {
-  return tf.tidy(() => {
-    const [styleH, styleW] = styleImage.shape;
-    const cropDim = Math.min(tileSize, styleH, styleW);
-    const maxY = styleH - cropDim;
-    const maxX = styleW - cropDim;
+  const [styleH, styleW] = styleImage.shape;
+  const cropDim = Math.min(tileSize, styleH, styleW);
+  const maxY = styleH - cropDim;
+  const maxX = styleW - cropDim;
 
-    const samplesPerLayer: tf.Tensor2D[][] = styleLayers.map(() => []);
+  const samplesPerLayer: tf.Tensor2D[][] = styleLayers.map(() => []);
 
-    for (let i = 0; i < STYLE_CROP_SAMPLES; i++) {
-      const y = maxY > 0 ? Math.floor(Math.random() * (maxY + 1)) : 0;
-      const x = maxX > 0 ? Math.floor(Math.random() * (maxX + 1)) : 0;
+  for (let i = 0; i < STYLE_CROP_SAMPLES; i++) {
+    const y = maxY > 0 ? Math.floor(Math.random() * (maxY + 1)) : 0;
+    const x = maxX > 0 ? Math.floor(Math.random() * (maxX + 1)) : 0;
+
+    // One scope per sample, rather than one around the whole loop: the Gram matrices are all that
+    // outlive a sample, but a shared scope would hold every crop's activations — a full set of network
+    // intermediates each — alive until the last sample was done.
+    tf.tidy(() => {
       const crop = styleImage.slice([y, x, 0], [cropDim, cropDim, 3]) as tf.Tensor3D;
       const batched = featureModel.preprocess(crop);
       const acts = featureModel.activations(batched, styleLayers.map((l) => l.nodeName));
       acts.forEach((act, li) => {
-        samplesPerLayer[li].push(gramMatrix(act as tf.Tensor4D));
+        samplesPerLayer[li].push(tf.keep(gramMatrix(act as tf.Tensor4D)));
       });
-    }
+    });
+  }
 
-    return samplesPerLayer.map((samples) => tf.keep(tf.stack(samples).mean(0) as tf.Tensor2D));
+  return samplesPerLayer.map((samples) => {
+    const mean = tf.tidy(() => tf.keep(tf.stack(samples).mean(0) as tf.Tensor2D));
+    samples.forEach((sample) => sample.dispose());
+    return mean;
   });
 }
 
@@ -139,11 +192,11 @@ async function optimizeStep(
   featureModel: FeatureModel,
   contentLayer: DiscoveredLayer,
   styleLayers: DiscoveredLayer[],
-  contentImageAtOctave: tf.Tensor3D,
+  contentTargets: Map<string, tf.Tensor>,
   styleGramTargets: tf.Tensor2D[],
   params: StyleParams,
 ): Promise<void> {
-  const lossFn = makeTiledStyleLoss(featureModel, contentLayer, styleLayers, contentImageAtOctave, styleGramTargets, params);
+  const lossFn = makeTiledStyleLoss(featureModel, contentLayer, styleLayers, contentTargets, styleGramTargets, params);
   const gradient = await computeTiledGradient(generated as unknown as tf.Tensor3D, params.tileSize, lossFn);
 
   // Tiling means accumulating several separate tf.grad() calls into one gradient tensor, which
@@ -200,6 +253,7 @@ export async function runStyleTransfer(
   let contentImageAtOctave = tf.tidy(
     () => tf.keep(tf.image.resizeBilinear(contentImage, shapes[0])) as tf.Tensor3D,
   );
+  let contentTargets = computeContentTargets(featureModel, contentLayer, contentImageAtOctave, params.tileSize);
 
   try {
     octaveLoop: for (let octave = 0; octave < shapes.length; octave++) {
@@ -219,6 +273,10 @@ export async function runStyleTransfer(
         contentImageAtOctave = tf.tidy(
           () => tf.keep(tf.image.resizeBilinear(contentImage, [targetH, targetW])) as tf.Tensor3D,
         );
+
+        // Tied to this octave's resolution and tile grid, so the previous octave's set is dead weight.
+        contentTargets.forEach((target) => target.dispose());
+        contentTargets = computeContentTargets(featureModel, contentLayer, contentImageAtOctave, params.tileSize);
       }
 
       for (let step = 0; step < params.stepsPerOctave; step++) {
@@ -238,7 +296,7 @@ export async function runStyleTransfer(
           featureModel,
           contentLayer,
           styleLayers,
-          contentImageAtOctave,
+          contentTargets,
           styleGramTargets,
           params,
         );
@@ -261,6 +319,7 @@ export async function runStyleTransfer(
   } finally {
     generated.dispose();
     contentImageAtOctave.dispose();
+    contentTargets.forEach((target) => target.dispose());
     styleGramTargets.forEach((g) => g.dispose());
     optimizer.dispose();
   }

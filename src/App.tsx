@@ -33,6 +33,22 @@ import { tf } from './ml/tfSetup';
 
 const DEFAULT_TEMPLATE_ID = 'paisley-color';
 
+/**
+ * A GPU that runs out of memory or gets reset mid-run surfaces as whatever low-level call happened to be
+ * in flight — on iOS that's Safari's "map async not successful" from a failed buffer readback, which tells
+ * the person looking at it nothing about what to do next. The backend is rebuilt on the next run by
+ * `ensureBackendHealthy`, so this only needs to explain what happened and which knobs lower the cost.
+ */
+function describeRunError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+
+  if (/map async|device (is )?lost|out of memory|GPUDevice|createBuffer/i.test(message)) {
+    return 'The GPU ran out of memory or was reset partway through. Try a smaller tile size or fewer octaves, then Generate again.';
+  }
+
+  return message;
+}
+
 // 320 where there is room for it, less on a phone — see `deviceLimits`.
 const DEFAULT_TILE_SIZE = Math.min(320, getDeviceLimits().maxTileSize);
 
@@ -371,8 +387,8 @@ function App() {
         }
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setEngineStatus({ phase: 'error', message });
+      console.error('Run failed:', err);
+      setEngineStatus({ phase: 'error', message: describeRunError(err) });
     } finally {
       baseTensor?.dispose();
       templateTensor?.dispose();

@@ -42,6 +42,16 @@ function tileStartPositions(dim: number, tileSize: number): number[] {
   return Array.from(new Set(starts));
 }
 
+/**
+ * The tile size a run will actually use: what was asked for, capped by the device's ceiling and by the
+ * image itself. Every tile pass holds a full-image gradient plus the autodiff tape for one tile, and that
+ * tape scales with the tile's area — capping here rather than at each caller covers both the dream and the
+ * style path, and also catches a too-large tile size restored from a previously saved result.
+ */
+export function effectiveTileSize(requestedTileSize: number, height: number, width: number): number {
+  return Math.min(requestedTileSize, getDeviceLimits().maxTileSize, height, width);
+}
+
 export function computeTileGrid(height: number, width: number, tileSize: number): TileSpec[] {
   // Tiles are always kept square (clamped by whichever of height/width is smaller), even when the
   // image itself isn't. tf.js's CPU backend has a real bug in its gradient for a non-square
@@ -80,14 +90,10 @@ export async function computeTiledGradient(
 ): Promise<tf.Tensor3D> {
   const [h, w] = image.shape;
 
-  // Every tile pass holds a full-image gradient plus the autodiff tape for one tile, and that tape
-  // scales with the tile's area. Capping here rather than at each caller covers both the dream and the
-  // style path, and also catches a too-large tile size restored from a previously saved result.
-  const tileSize = Math.min(requestedTileSize, getDeviceLimits().maxTileSize);
-  const tileDim = Math.min(tileSize, h, w);
+  const tileSize = effectiveTileSize(requestedTileSize, h, w);
 
-  const shiftY = Math.floor(Math.random() * tileDim);
-  const shiftX = Math.floor(Math.random() * tileDim);
+  const shiftY = Math.floor(Math.random() * tileSize);
+  const shiftX = Math.floor(Math.random() * tileSize);
   const rolled = tf.tidy(() => tf.keep(rollImage(image, shiftY, shiftX)) as tf.Tensor3D);
 
   const tiles = computeTileGrid(h, w, tileSize);
