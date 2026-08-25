@@ -3,6 +3,9 @@ import paisleyColorUrl from '../assets/templates/paisley-color.jpg';
 import paisleyBwUrl from '../assets/templates/paisley-bw.jpg';
 import hongKongUrl from '../assets/templates/hong-kong.jpg';
 import dotPaintingUrl from '../assets/templates/dot-painting.jpg';
+import hongKong2Url from '../assets/templates/hong-kong-2.jpg';
+import starryNightUrl from '../assets/templates/starry-night.jpg';
+import discoBallUrl from '../assets/templates/disco-ball.jpg';
 import greatWaveUrl from '../assets/templates/great-wave.jpg';
 import monetBridgeUrl from '../assets/templates/monet-bridge.jpg';
 import facesUrl from '../assets/templates/faces.jpg';
@@ -16,6 +19,9 @@ import paisleyColorThumb from '../assets/templates/thumbs/paisley-color.jpg';
 import paisleyBwThumb from '../assets/templates/thumbs/paisley-bw.jpg';
 import hongKongThumb from '../assets/templates/thumbs/hong-kong.jpg';
 import dotPaintingThumb from '../assets/templates/thumbs/dot-painting.jpg';
+import hongKong2Thumb from '../assets/templates/thumbs/hong-kong-2.jpg';
+import starryNightThumb from '../assets/templates/thumbs/starry-night.jpg';
+import discoBallThumb from '../assets/templates/thumbs/disco-ball.jpg';
 import greatWaveThumb from '../assets/templates/thumbs/great-wave.jpg';
 import monetBridgeThumb from '../assets/templates/thumbs/monet-bridge.jpg';
 import facesThumb from '../assets/templates/thumbs/faces.jpg';
@@ -77,10 +83,13 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
   staticTemplate('paisley-bw', 'Paisley (B&W)', paisleyBwUrl, paisleyBwThumb),
   generatedPaisley,
   staticTemplate('hong-kong', 'Hong Kong', hongKongUrl, hongKongThumb),
+  staticTemplate('hong-kong-2', 'Hong Kong 2', hongKong2Url, hongKong2Thumb),
   staticTemplate('dot-painting', 'Dot Painting', dotPaintingUrl, dotPaintingThumb),
+  staticTemplate('starry-night', 'Starry Night', starryNightUrl, starryNightThumb),
   staticTemplate('great-wave', 'Great Wave', greatWaveUrl, greatWaveThumb),
   staticTemplate('monet-bridge', 'Monet Bridge', monetBridgeUrl, monetBridgeThumb),
   staticTemplate('flower-beds', 'Flower Beds', flowerBedsUrl, flowerBedsThumb),
+  staticTemplate('disco-ball', 'Disco Ball', discoBallUrl, discoBallThumb),
   staticTemplate('lightning', 'Lightning', lightningUrl, lightningThumb),
   staticTemplate('cracked-earth', 'Cracked Earth', crackedEarthUrl, crackedEarthThumb),
   staticTemplate('flags', 'Flags', flagsUrl, flagsThumb),
