@@ -58,7 +58,10 @@ export function BuiltInTemplatePicker({ onSelect, disabled }: BuiltInTemplatePic
             disabled={disabled || pendingId !== null}
             title={`Use the "${template.name}" built-in image as the style template.`}
           >
-            {thumbnails[template.id] && <img src={thumbnails[template.id]} alt={template.name} />}
+            {thumbnails[template.id] && (
+              // Only the thumbnails scrolled into view are fetched; the full-size image waits for a click.
+              <img src={thumbnails[template.id]} alt={template.name} loading="lazy" />
+            )}
             <span>{pendingId === template.id ? 'Loading…' : template.name}</span>
           </button>
         ))}
