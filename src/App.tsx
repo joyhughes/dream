@@ -494,7 +494,6 @@ function App() {
       viewportFill
       controlsLabel="Dream controls"
       viewportLabel="Result"
-      actions={<ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />}
       viewport={
         <ResultCanvas
           canvasRef={canvasRef}
@@ -516,6 +515,7 @@ function App() {
             recordingSupported={recordingSupported}
             recordUnavailableForVideo={isBaseVideo}
             frameProgressLabel={frameProgress ? `Frame ${frameProgress.index + 1} / ${frameProgress.total}` : null}
+            modeTabs={<ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />}
             onGenerate={handleGenerate}
             onCancel={handleCancel}
             onPause={handlePause}

@@ -31,19 +31,32 @@ body {
   overflow: hidden;
 }
 
+/* Sits at the top of the actions panel, directly above Generate: the mode decides what Generate runs,
+   so the two belong together. The panel's own gap provides the spacing. */
 .mode-tabs {
   display: flex;
   gap: 0.5rem;
-  margin-bottom: 1.25rem;
 }
 
 .mode-tab {
+  /* Equal halves of the dock's width, so the pair reads as one switch rather than two loose buttons. */
+  flex: 1;
   background: #1b1c22;
   border: 1px solid #34363f;
   border-radius: 8px;
-  padding: 0.5rem 1.1rem;
+  padding: 0.5rem 0.75rem;
   color: rgba(255, 255, 255, 0.7);
   cursor: pointer;
+  white-space: nowrap;
+}
+
+.mode-tab:hover:not(:disabled) {
+  border-color: #6a6dff;
+}
+
+.mode-tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .mode-tab--active {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from '../types';
 import { getDeviceLimits } from '../ml/deviceLimits';
 
@@ -392,6 +392,8 @@ interface ActionsBarProps {
   recordingSupported: boolean;
   recordUnavailableForVideo: boolean;
   frameProgressLabel?: string | null;
+  /** The DeepDream / Style Transfer picker, shown above Generate — it decides what Generate will run. */
+  modeTabs?: ReactNode;
   onGenerate: () => void;
   onCancel: () => void;
   onPause: () => void;
@@ -412,6 +414,7 @@ export function ActionsBar({
   recordingSupported,
   recordUnavailableForVideo,
   frameProgressLabel,
+  modeTabs,
   onGenerate,
   onCancel,
   onPause,
@@ -424,6 +427,7 @@ export function ActionsBar({
 
   return (
     <div className="actions-panel">
+      {modeTabs}
       <div className="controls-actions">
         {!isRunning && (
           <button
