@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ImageDropzone } from './components/ImageDropzone';
 import { BuiltInTemplatePicker } from './components/BuiltInTemplatePicker';
 import { ModeTabs } from './components/ModeTabs';
-import { PresetPanel, SliderPanel, VideoOptionsPanel, ActionsBar } from './components/ControlsPanel';
+import { PresetPanel, SliderPanel, VideoOptionsPanel, ActionsBar, RegularizerPanel } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
 import { HoverPopup } from './components/HoverPopup';
 import { initializeML, ensureBackendHealthy } from './ml/tfSetup';
@@ -26,7 +26,7 @@ import { MovieRecorder, isMovieRecordingSupported } from './ml/movieRecorder';
 import { encodeFrameSequence } from './ml/frameEncoding';
 import { VideoFrameSource } from './ml/videoFrames';
 import { BUILT_IN_TEMPLATES } from './templates/builtInTemplates';
-import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from './types';
+import type { DreamParams, DreamPreset, EngineStatus, ImageRegularizers, Mode, StyleParams } from './types';
 import { AppFrame, ControlGroup } from './simui';
 import { FeatureNetworkPicker } from './components/FeatureNetworkPicker';
 import { tf } from './ml/tfSetup';
@@ -59,12 +59,25 @@ function describeRunError(err: unknown): string {
 // 320 where there is room for it, less on a phone — see `deviceLimits`.
 const DEFAULT_TILE_SIZE = Math.min(320, getDeviceLimits().maxTileSize);
 
+/**
+ * Every regularizer defaults to off, so a fresh session reproduces exactly what this app produced before
+ * they existed. They are opt-in tools, not a new house style.
+ */
+const NO_REGULARIZERS: ImageRegularizers = {
+  l2Decay: 0,
+  blurSigma: 0,
+  blurEvery: 0,
+};
+
 const DEFAULT_DREAM_PARAMS: DreamParams = {
   octaves: 3,
   octaveScale: 1.4,
   stepsPerOctave: 20,
   stepSize: 0.02,
   tileSize: DEFAULT_TILE_SIZE,
+  tvWeight: 0,
+  lapLevels: 1,
+  regularizers: NO_REGULARIZERS,
 };
 
 const DEFAULT_STYLE_PARAMS: StyleParams = {
@@ -76,6 +89,7 @@ const DEFAULT_STYLE_PARAMS: StyleParams = {
   octaveScale: 1.4,
   stepsPerOctave: 40,
   tileSize: DEFAULT_TILE_SIZE,
+  regularizers: NO_REGULARIZERS,
 };
 
 function App() {
@@ -576,6 +590,17 @@ function App() {
 
           <ControlGroup title="Parameters">
             <SliderPanel
+              mode={mode}
+              dreamParams={dreamParams}
+              onDreamParamsChange={setDreamParams}
+              styleParams={styleParams}
+              onStyleParamsChange={setStyleParams}
+              isRunning={isRunning}
+            />
+          </ControlGroup>
+
+          <ControlGroup title="Regularizers" defaultOpen={false}>
+            <RegularizerPanel
               mode={mode}
               dreamParams={dreamParams}
               onDreamParamsChange={setDreamParams}

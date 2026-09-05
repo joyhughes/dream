@@ -2,6 +2,7 @@ import { tf } from './tfSetup';
 import type { FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient } from './tiledGradient';
+import { applyImageRegularizers, laplacianNormalize, totalVariationGradient } from './regularizers';
 import type { PauseController } from './pauseController';
 import type { DreamParams, DreamPreset } from '../types';
 
@@ -68,16 +69,31 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
       );
 
       const updated = tf.tidy(() => {
-        const { variance } = tf.moments(gradient);
-        const std = variance.sqrt();
-        const normalized = gradient.div(std.add(1e-8)) as tf.Tensor3D;
+        // Both terms are normalized to unit standard deviation before they are combined, so `stepSize`
+        // means the same thing regardless of the loss's raw scale and `tvWeight` reads as the share of
+        // the step spent smoothing rather than ascending.
+        const ascent = laplacianNormalize(gradient, params.lapLevels);
 
-        return tf.keep(tf.clipByValue(current.add(normalized.mul(params.stepSize)), 0, 1)) as tf.Tensor3D;
+        // Total variation is a penalty, so its gradient is subtracted from the direction we ascend in.
+        // It is computed on the whole image rather than per tile: smoothness across a tile boundary is
+        // exactly what a per-tile version would be blind to.
+        const direction =
+          params.tvWeight > 0
+            ? (ascent.sub(laplacianNormalize(totalVariationGradient(current), 1).mul(params.tvWeight)) as tf.Tensor3D)
+            : ascent;
+
+        return tf.keep(tf.clipByValue(current.add(direction.mul(params.stepSize)), 0, 1)) as tf.Tensor3D;
       });
       gradient.dispose();
 
       current.dispose();
       current = updated;
+
+      const regularized = applyImageRegularizers(current, params.regularizers, step);
+      if (regularized) {
+        current.dispose();
+        current = regularized;
+      }
 
       if (onProgress && (step % previewEvery === 0 || step === params.stepsPerOctave - 1)) {
         await onProgress({

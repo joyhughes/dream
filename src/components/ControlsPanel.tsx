@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import type { DreamParams, DreamPreset, EngineStatus, Mode, StyleParams } from '../types';
+import type { DreamParams, DreamPreset, EngineStatus, ImageRegularizers, Mode, StyleParams } from '../types';
 import { getDeviceLimits } from '../ml/deviceLimits';
 
 // Matches the cap `computeTiledGradient` enforces, so the slider can't offer a size that is silently
@@ -312,16 +312,6 @@ export function SliderPanel({
             onChange={(v) => onStyleParamsChange({ ...styleParams, styleWeight: v })}
           />
           <Slider
-            label="Smoothing (TV weight)"
-            value={styleParams.totalVariationWeight}
-            min={0}
-            max={5}
-            step={0.1}
-            disabled={isRunning}
-            tooltip="Penalizes noisy, high-frequency detail to keep the result smooth. Higher values reduce speckling and graininess, at the cost of some fine detail."
-            onChange={(v) => onStyleParamsChange({ ...styleParams, totalVariationWeight: v })}
-          />
-          <Slider
             label="Learning rate"
             value={styleParams.learningRate}
             min={0.002}
@@ -376,6 +366,115 @@ export function SliderPanel({
       <p className="field-hint">
         Smaller tiles capture more native detail on large images but take longer per step — 224 is the
         network&apos;s native resolution and gives maximum fidelity.
+      </p>
+    </div>
+  );
+}
+
+interface RegularizerPanelProps {
+  mode: Mode;
+  dreamParams: DreamParams;
+  onDreamParamsChange: (params: DreamParams) => void;
+  styleParams: StyleParams;
+  onStyleParamsChange: (params: StyleParams) => void;
+  isRunning: boolean;
+}
+
+/**
+ * Controls for the priors that keep gradient ascent producing something image-like. Every one defaults to
+ * off, so this panel starts as a no-op and each slider is a deliberate opt-in.
+ */
+export function RegularizerPanel({
+  mode,
+  dreamParams,
+  onDreamParamsChange,
+  styleParams,
+  onStyleParamsChange,
+  isRunning,
+}: RegularizerPanelProps) {
+  const regularizers = mode === 'deepdream' ? dreamParams.regularizers : styleParams.regularizers;
+
+  const setRegularizers = (next: Partial<ImageRegularizers>) => {
+    const merged = { ...regularizers, ...next };
+    if (mode === 'deepdream') {
+      onDreamParamsChange({ ...dreamParams, regularizers: merged });
+    } else {
+      onStyleParamsChange({ ...styleParams, regularizers: merged });
+    }
+  };
+
+  return (
+    <div className="slider-panel">
+      {mode === 'style' && (
+        <Slider
+          label="Smoothing (TV weight)"
+          value={styleParams.totalVariationWeight}
+          min={0}
+          max={5}
+          step={0.1}
+          disabled={isRunning}
+          tooltip="Total variation: penalizes the difference between neighboring pixels, the classic prior against high-frequency noise (Mahendran & Vedaldi 2015). Unlike the others here it is a term in the loss the optimizer minimizes, not something applied afterward — and it is the one regularizer that defaults to on, since style transfer speckles badly without it."
+          onChange={(v) => onStyleParamsChange({ ...styleParams, totalVariationWeight: v })}
+        />
+      )}
+      {mode === 'deepdream' && (
+        <>
+          <Slider
+            label="Smoothing (TV weight)"
+            value={dreamParams.tvWeight}
+            min={0}
+            max={1}
+            step={0.05}
+            disabled={isRunning}
+            tooltip="Total variation: penalizes the difference between neighboring pixels, which is the classic prior against the high-frequency noise that unconstrained gradient ascent produces (Mahendran & Vedaldi 2015). Read it as the share of each step spent smoothing rather than amplifying — 0 is off, and past about 0.5 smoothing wins and detail dissolves."
+            onChange={(v) => onDreamParamsChange({ ...dreamParams, tvWeight: v })}
+          />
+          <Slider
+            label="Frequency bands"
+            value={dreamParams.lapLevels}
+            min={1}
+            max={6}
+            step={1}
+            disabled={isRunning}
+            tooltip="Laplacian pyramid gradient normalization (Mordvintsev et al. 2015, the 'lapnorm' technique). A raw gradient is dominated by its lowest frequencies, so the pattern grows in broad smears; splitting it into this many frequency bands and normalizing each separately gives fine detail an equal say. 1 is a plain whole-image normalization — the original behavior. 4 is the classic setting."
+            onChange={(v) => onDreamParamsChange({ ...dreamParams, lapLevels: v })}
+          />
+        </>
+      )}
+      <Slider
+        label="Blur strength (σ)"
+        value={regularizers.blurSigma}
+        min={0}
+        max={2}
+        step={0.1}
+        disabled={isRunning}
+        tooltip="Standard deviation of a Gaussian blur applied periodically to the image itself (Yosinski et al. 2015). Blurring between steps suppresses the high-frequency structure the network keeps reaching for, and the pattern that survives repeated blurring is the one that is genuinely there at a larger scale. 0 is off; it only takes effect when the interval below is set."
+        onChange={(v) => setRegularizers({ blurSigma: v })}
+      />
+      <Slider
+        label="Blur every N steps"
+        value={regularizers.blurEvery}
+        min={0}
+        max={20}
+        step={1}
+        disabled={isRunning}
+        tooltip="How often the blur above runs. 0 disables it entirely; 1 blurs after every step, which is heavy-handed; 4 to 8 is the usual range — often enough to hold noise down, rarely enough that detail still accumulates in between."
+        onChange={(v) => setRegularizers({ blurEvery: v })}
+      />
+      <Slider
+        label="L2 decay"
+        value={regularizers.l2Decay}
+        min={0}
+        max={0.1}
+        step={0.005}
+        disabled={isRunning}
+        tooltip="Shrinks every pixel a little toward the image's average color after each step (Simonyan et al. 2014; Yosinski et al. 2015). Ascent pushes pixels toward the extremes and they stick there once clipped; a small decay bleeds that off continuously. Costs contrast in exchange, so keep it low — 0.01 is already noticeable."
+        onChange={(v) => setRegularizers({ l2Decay: v })}
+      />
+      <p className="field-hint">
+        Each of these is a prior on what a natural image looks like — without one, the true optimum of
+        gradient ascent is high-frequency noise rather than a picture. All start off, except style
+        transfer&apos;s smoothing.
       </p>
     </div>
   );

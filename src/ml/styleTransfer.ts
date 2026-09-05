@@ -2,6 +2,7 @@ import { tf } from './tfSetup';
 import type { DiscoveredLayer, FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient, computeTileGrid, effectiveTileSize, type TileSpec } from './tiledGradient';
+import { applyImageRegularizers } from './regularizers';
 import type { PauseController } from './pauseController';
 import type { StyleParams } from '../types';
 
@@ -300,6 +301,15 @@ export async function runStyleTransfer(
           styleGramTargets,
           params,
         );
+
+        // Image-space regularizers act on the variable in place. Adam's moment estimates are keyed by
+        // variable name and survive the assignment, so its momentum carries across the change rather
+        // than being reset by it.
+        const regularized = applyImageRegularizers(generated as unknown as tf.Tensor3D, params.regularizers, step);
+        if (regularized) {
+          generated.assign(regularized);
+          regularized.dispose();
+        }
 
         if (onProgress && (step % 5 === 0 || step === params.stepsPerOctave - 1)) {
           await onProgress({
