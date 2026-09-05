@@ -176,9 +176,17 @@ export function shouldBlurOnStep(regularizers: ImageRegularizers, step: number):
 }
 
 /**
- * The image-space regularizers, applied to a finished step. Returns a new tensor the caller owns, or
- * `null` when nothing is enabled on this step — the common case, since these all default to off, and
- * returning null rather than a copy keeps a disabled panel from allocating a full image every step.
+ * Whether anything in the image-space pass would actually do something on this step. These all default to
+ * off, so callers check this first and skip the work — including, where the run is not already in RGB,
+ * the pair of color conversions that the pass would otherwise need.
+ */
+export function hasActiveImageRegularizer(regularizers: ImageRegularizers, step: number): boolean {
+  return regularizers.l2Decay > 0 || shouldBlurOnStep(regularizers, step);
+}
+
+/**
+ * The image-space regularizers, applied to a finished step. Returns a new tensor the caller owns; call it
+ * only when `hasActiveImageRegularizer` says there is something to do.
  *
  * L2 decay shrinks the image toward its own mean. The literature applies it in a mean-centered space
  * where decay pulls toward zero; working in [0, 1] as we do, the mean is where zero was. It bleeds off
@@ -188,23 +196,16 @@ export function applyImageRegularizers(
   image: tf.Tensor3D,
   regularizers: ImageRegularizers,
   step: number,
-): tf.Tensor3D | null {
-  const wantsBlur = shouldBlurOnStep(regularizers, step);
-  const wantsDecay = regularizers.l2Decay > 0;
-
-  if (!wantsBlur && !wantsDecay) {
-    return null;
-  }
-
+): tf.Tensor3D {
   return tf.tidy(() => {
     let result = image as tf.Tensor3D;
 
-    if (wantsDecay) {
+    if (regularizers.l2Decay > 0) {
       const mean = result.mean();
       result = mean.add(result.sub(mean).mul(1 - regularizers.l2Decay)) as tf.Tensor3D;
     }
 
-    if (wantsBlur) {
+    if (shouldBlurOnStep(regularizers, step)) {
       result = gaussianBlur(result, regularizers.blurSigma);
     }
 

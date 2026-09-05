@@ -2,7 +2,8 @@ import { tf } from './tfSetup';
 import type { DiscoveredLayer, FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient, computeTileGrid, effectiveTileSize, type TileSpec } from './tiledGradient';
-import { applyImageRegularizers } from './regularizers';
+import { applyImageRegularizers, hasActiveImageRegularizer } from './regularizers';
+import { clampToColorSpace, fromRgb, hsvToRgb, resizeInRgb, toRgb } from './colorSpace';
 import type { PauseController } from './pauseController';
 import type { StyleParams } from '../types';
 
@@ -107,7 +108,10 @@ function makeTiledStyleLoss(
   const indexOfName = new Map(requestNames.map((name, index) => [name, index]));
 
   return (tile: tf.Tensor3D, spec: TileSpec): tf.Scalar => {
-    const batched = featureModel.preprocess(tile);
+    // The tile is in the working color space; the network only ever sees RGB. Converting inside the tape
+    // is what brings the gradient back in the working space's coordinates.
+    const rgbTile = params.colorSpace === 'hsv' ? hsvToRgb(tile) : tile;
+    const batched = featureModel.preprocess(rgbTile);
     const acts = featureModel.activations(batched, requestNames);
 
     const contentTarget = contentTargets.get(tileKey(spec));
@@ -129,7 +133,9 @@ function makeTiledStyleLoss(
       styleLosses.length,
     ) as tf.Scalar;
 
-    const tvLoss = totalVariationLoss(tile);
+    // Smoothness is a property of the visible image, so this is measured on the RGB the network saw
+    // rather than on the raw channels — a hue that steps across the red wrap is not a rough edge.
+    const tvLoss = totalVariationLoss(rgbTile);
 
     return contentLoss
       .mul(params.contentWeight)
@@ -206,7 +212,7 @@ async function optimizeStep(
   gradient.dispose();
 
   tf.tidy(() => {
-    generated.assign(tf.clipByValue(generated, 0, 1));
+    generated.assign(clampToColorSpace(generated as unknown as tf.Tensor3D, params.colorSpace));
   });
 }
 
@@ -245,8 +251,10 @@ export async function runStyleTransfer(
   const [h, w] = contentImage.shape;
   const shapes = computeOctaveShapes(h, w, params.octaves, params.octaveScale);
 
+  // `generated` is held in the working color space from here on; `contentImageAtOctave` stays RGB, since
+  // it only ever feeds the network.
   let generated = tf.variable(
-    tf.tidy(() => tf.image.resizeBilinear(contentImage, shapes[0]) as tf.Tensor3D),
+    tf.tidy(() => fromRgb(tf.image.resizeBilinear(contentImage, shapes[0]) as tf.Tensor3D, params.colorSpace)),
     true,
     'dream-style-generated',
   );
@@ -261,7 +269,9 @@ export async function runStyleTransfer(
       const [targetH, targetW] = shapes[octave];
 
       if (octave > 0) {
-        const upscaled = tf.tidy(() => tf.image.resizeBilinear(generated, [targetH, targetW]).clone());
+        const upscaled = tf.tidy(() =>
+          resizeInRgb(generated as unknown as tf.Tensor3D, params.colorSpace, [targetH, targetW]),
+        );
         generated.dispose();
         generated = tf.variable(upscaled, true, 'dream-style-generated');
 
@@ -305,8 +315,13 @@ export async function runStyleTransfer(
         // Image-space regularizers act on the variable in place. Adam's moment estimates are keyed by
         // variable name and survive the assignment, so its momentum carries across the change rather
         // than being reset by it.
-        const regularized = applyImageRegularizers(generated as unknown as tf.Tensor3D, params.regularizers, step);
-        if (regularized) {
+        if (hasActiveImageRegularizer(params.regularizers, step)) {
+          // Applied in RGB whatever space the run is in: blurring the hue channel would smear across the
+          // red wrap, and decaying it would pull every color toward whichever hue sits at zero.
+          const regularized = tf.tidy(() => {
+            const rgb = toRgb(generated as unknown as tf.Tensor3D, params.colorSpace);
+            return tf.keep(fromRgb(applyImageRegularizers(rgb, params.regularizers, step), params.colorSpace));
+          });
           generated.assign(regularized);
           regularized.dispose();
         }
@@ -325,7 +340,8 @@ export async function runStyleTransfer(
       }
     }
 
-    return tf.tidy(() => tf.keep(generated.clone())) as tf.Tensor3D;
+    // Callers always get RGB back, whatever space the run worked in.
+    return tf.tidy(() => tf.keep(toRgb(generated as unknown as tf.Tensor3D, params.colorSpace))) as tf.Tensor3D;
   } finally {
     generated.dispose();
     contentImageAtOctave.dispose();

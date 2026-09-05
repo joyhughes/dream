@@ -2,9 +2,15 @@ import { tf } from './tfSetup';
 import type { FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient } from './tiledGradient';
-import { applyImageRegularizers, laplacianNormalize, totalVariationGradient } from './regularizers';
+import {
+  applyImageRegularizers,
+  hasActiveImageRegularizer,
+  laplacianNormalize,
+  totalVariationGradient,
+} from './regularizers';
+import { clampToColorSpace, fromRgb, hsvToRgb, resizeInRgb, toRgb } from './colorSpace';
 import type { PauseController } from './pauseController';
-import type { DreamParams, DreamPreset } from '../types';
+import type { ColorSpace, DreamParams, DreamPreset } from '../types';
 
 export interface DeepDreamProgress {
   octave: number;
@@ -24,8 +30,15 @@ export interface RunDeepDreamOptions {
   pauseController?: PauseController;
 }
 
-function computeLoss(tile: tf.Tensor3D, featureModel: FeatureModel, preset: DreamPreset): tf.Scalar {
-  const batched = featureModel.preprocess(tile);
+function computeLoss(
+  tile: tf.Tensor3D,
+  featureModel: FeatureModel,
+  preset: DreamPreset,
+  colorSpace: ColorSpace,
+): tf.Scalar {
+  // The tile arrives in whatever space the ascent works in; the network only ever sees RGB. This
+  // conversion is inside the tape, so the gradient comes back in the working space's coordinates.
+  const batched = featureModel.preprocess(colorSpace === 'hsv' ? hsvToRgb(tile) : tile);
   const nodeNames = preset.layers.map((l) => l.nodeName);
   const activations = featureModel.activations(batched, nodeNames);
 
@@ -44,28 +57,45 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
   const [h, w] = baseImage.shape;
   const shapes = computeOctaveShapes(h, w, params.octaves, params.octaveScale);
 
-  let current = tf.tidy(() => tf.keep(tf.image.resizeBilinear(baseImage, shapes[0])) as tf.Tensor3D);
+  const { colorSpace } = params;
+
+  // From here to the end of the run `current` is held in `colorSpace`, not RGB. Everything that touches
+  // it — the loss, the regularizers, the preview — converts at its own boundary.
+  let current = tf.tidy(() => {
+    const resized = tf.image.resizeBilinear(baseImage, shapes[0]) as tf.Tensor3D;
+    return tf.keep(fromRgb(resized, colorSpace)) as tf.Tensor3D;
+  });
+
+  // Callers always get RGB back, whatever space the run worked in — including on an abort, which can
+  // land anywhere in the loop below.
+  const finish = (): tf.Tensor3D => {
+    const rgb = toRgb(current, colorSpace);
+    current.dispose();
+    return rgb;
+  };
 
   for (let octave = 0; octave < shapes.length; octave++) {
     const [targetH, targetW] = shapes[octave];
 
-    const upscaled = tf.tidy(() => tf.keep(tf.image.resizeBilinear(current, [targetH, targetW])) as tf.Tensor3D);
+    const upscaled = tf.tidy(
+      () => tf.keep(resizeInRgb(current, colorSpace, [targetH, targetW])) as tf.Tensor3D,
+    );
     current.dispose();
     current = upscaled;
 
     for (let step = 0; step < params.stepsPerOctave; step++) {
       if (signal?.aborted) {
-        return current;
+        return finish();
       }
 
       await pauseController?.waitIfPaused(signal);
 
       if (signal?.aborted) {
-        return current;
+        return finish();
       }
 
       const gradient = await computeTiledGradient(current, params.tileSize, (tile) =>
-        computeLoss(tile, featureModel, preset),
+        computeLoss(tile, featureModel, preset, colorSpace),
       );
 
       const updated = tf.tidy(() => {
@@ -82,32 +112,44 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
             ? (ascent.sub(laplacianNormalize(totalVariationGradient(current), 1).mul(params.tvWeight)) as tf.Tensor3D)
             : ascent;
 
-        return tf.keep(tf.clipByValue(current.add(direction.mul(params.stepSize)), 0, 1)) as tf.Tensor3D;
+        const stepped = current.add(direction.mul(params.stepSize)) as tf.Tensor3D;
+        return tf.keep(clampToColorSpace(stepped, colorSpace)) as tf.Tensor3D;
       });
       gradient.dispose();
 
       current.dispose();
       current = updated;
 
-      const regularized = applyImageRegularizers(current, params.regularizers, step);
-      if (regularized) {
+      // Regularizers are defined on natural images, so they are applied in RGB regardless of the space
+      // being optimized in: a blur of the hue channel would smear across the red wrap, and a decay of it
+      // would pull every color toward whatever hue happens to sit at zero rather than toward gray.
+      if (hasActiveImageRegularizer(params.regularizers, step)) {
+        const regularized = tf.tidy(() => {
+          const rgb = toRgb(current, colorSpace);
+          return tf.keep(fromRgb(applyImageRegularizers(rgb, params.regularizers, step), colorSpace)) as tf.Tensor3D;
+        });
         current.dispose();
         current = regularized;
       }
 
       if (onProgress && (step % previewEvery === 0 || step === params.stepsPerOctave - 1)) {
-        await onProgress({
-          octave,
-          totalOctaves: shapes.length,
-          step,
-          totalStepsInOctave: params.stepsPerOctave,
-          image: current,
-        });
+        const preview = toRgb(current, colorSpace);
+        try {
+          await onProgress({
+            octave,
+            totalOctaves: shapes.length,
+            step,
+            totalStepsInOctave: params.stepsPerOctave,
+            image: preview,
+          });
+        } finally {
+          preview.dispose();
+        }
       }
 
       await tf.nextFrame();
     }
   }
 
-  return current;
+  return finish();
 }

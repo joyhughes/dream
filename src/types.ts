@@ -1,5 +1,9 @@
 export type Mode = 'deepdream' | 'style';
 
+import type { ColorSpace } from './ml/colorSpace';
+
+export type { ColorSpace };
+
 export interface DreamLayerTarget {
   nodeName: string;
   label: string;
@@ -36,6 +40,8 @@ export interface DreamParams {
   tvWeight: number;
   /** Frequency bands the ascent gradient is normalized across. 1 is a plain whole-image normalization. */
   lapLevels: number;
+  /** The space the optimization steps in. See `ml/colorSpace`. */
+  colorSpace: ColorSpace;
   regularizers: ImageRegularizers;
 }
 
@@ -48,6 +54,8 @@ export interface StyleParams {
   octaveScale: number;
   stepsPerOctave: number;
   tileSize: number;
+  /** The space the optimization steps in. See `ml/colorSpace`. */
+  colorSpace: ColorSpace;
   regularizers: ImageRegularizers;
 }
 

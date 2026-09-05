@@ -1,5 +1,13 @@
 import { useState, type ReactNode } from 'react';
-import type { DreamParams, DreamPreset, EngineStatus, ImageRegularizers, Mode, StyleParams } from '../types';
+import type {
+  ColorSpace,
+  DreamParams,
+  DreamPreset,
+  EngineStatus,
+  ImageRegularizers,
+  Mode,
+  StyleParams,
+} from '../types';
 import { getDeviceLimits } from '../ml/deviceLimits';
 
 // Matches the cap `computeTiledGradient` enforces, so the slider can't offer a size that is silently
@@ -392,19 +400,43 @@ export function RegularizerPanel({
   onStyleParamsChange,
   isRunning,
 }: RegularizerPanelProps) {
-  const regularizers = mode === 'deepdream' ? dreamParams.regularizers : styleParams.regularizers;
+  const isDream = mode === 'deepdream';
+  const regularizers = isDream ? dreamParams.regularizers : styleParams.regularizers;
+  const colorSpace = isDream ? dreamParams.colorSpace : styleParams.colorSpace;
 
   const setRegularizers = (next: Partial<ImageRegularizers>) => {
     const merged = { ...regularizers, ...next };
-    if (mode === 'deepdream') {
+    if (isDream) {
       onDreamParamsChange({ ...dreamParams, regularizers: merged });
     } else {
       onStyleParamsChange({ ...styleParams, regularizers: merged });
     }
   };
 
+  const setColorSpace = (next: ColorSpace) => {
+    if (isDream) {
+      onDreamParamsChange({ ...dreamParams, colorSpace: next });
+    } else {
+      onStyleParamsChange({ ...styleParams, colorSpace: next });
+    }
+  };
+
   return (
     <div className="slider-panel">
+      <label
+        className="field-row"
+        title="Which coordinates the optimizer steps in. RGB moves the three color channels independently. HSV moves hue, saturation and value instead, so one step is a rotation around the color wheel, a change in vividness, and a change in brightness — the same size of step reaches very different images. Hue being an angle, it wraps rather than clipping, so color drifts around the wheel instead of piling up at the ends. The network is always shown RGB either way."
+      >
+        <span>Color space</span>
+        <select
+          value={colorSpace}
+          onChange={(e) => setColorSpace(e.target.value as ColorSpace)}
+          disabled={isRunning}
+        >
+          <option value="rgb">RGB (default)</option>
+          <option value="hsv">HSV (hue / saturation / value)</option>
+        </select>
+      </label>
       {mode === 'style' && (
         <Slider
           label="Smoothing (TV weight)"
@@ -472,9 +504,9 @@ export function RegularizerPanel({
         onChange={(v) => setRegularizers({ l2Decay: v })}
       />
       <p className="field-hint">
-        Each of these is a prior on what a natural image looks like — without one, the true optimum of
-        gradient ascent is high-frequency noise rather than a picture. All start off, except style
-        transfer&apos;s smoothing.
+        The color space chooses what a step means; the rest are priors on what a natural image looks like —
+        without one, the true optimum of gradient ascent is high-frequency noise rather than a picture. All
+        start off, except style transfer&apos;s smoothing.
       </p>
     </div>
   );
