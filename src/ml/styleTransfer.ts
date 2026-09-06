@@ -3,7 +3,7 @@ import type { DiscoveredLayer, FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient, computeTileGrid, effectiveTileSize, type TileSpec } from './tiledGradient';
 import { applyImageRegularizers, hasActiveImageRegularizer } from './regularizers';
-import { clampToColorSpace, fromRgb, hsvToRgb, resizeInRgb, toRgb } from './colorSpace';
+import { clampToColorSpace, fromRgb, hsvToRgb, resizeInRgb, toRgb, withRgbView } from './colorSpace';
 import type { PauseController } from './pauseController';
 import type { StyleParams } from '../types';
 
@@ -327,13 +327,17 @@ export async function runStyleTransfer(
         }
 
         if (onProgress && (step % 5 === 0 || step === params.stepsPerOctave - 1)) {
-          await onProgress({
-            octave,
-            totalOctaves: shapes.length,
-            step,
-            totalStepsInOctave: params.stepsPerOctave,
-            image: generated as unknown as tf.Tensor3D,
-          });
+          // Converted for display: `generated` holds the working color space, and painting HSV channels
+          // as if they were RGB shows colors that are nowhere in the image.
+          await withRgbView(generated as unknown as tf.Tensor3D, params.colorSpace, (image) =>
+            onProgress({
+              octave,
+              totalOctaves: shapes.length,
+              step,
+              totalStepsInOctave: params.stepsPerOctave,
+              image,
+            }),
+          );
         }
 
         await tf.nextFrame();

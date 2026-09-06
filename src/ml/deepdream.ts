@@ -8,7 +8,7 @@ import {
   laplacianNormalize,
   totalVariationGradient,
 } from './regularizers';
-import { clampToColorSpace, fromRgb, hsvToRgb, resizeInRgb, toRgb } from './colorSpace';
+import { clampToColorSpace, fromRgb, hsvToRgb, resizeInRgb, toRgb, withRgbView } from './colorSpace';
 import type { PauseController } from './pauseController';
 import type { ColorSpace, DreamParams, DreamPreset } from '../types';
 
@@ -133,18 +133,15 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
       }
 
       if (onProgress && (step % previewEvery === 0 || step === params.stepsPerOctave - 1)) {
-        const preview = toRgb(current, colorSpace);
-        try {
-          await onProgress({
+        await withRgbView(current, colorSpace, (image) =>
+          onProgress({
             octave,
             totalOctaves: shapes.length,
             step,
             totalStepsInOctave: params.stepsPerOctave,
-            image: preview,
-          });
-        } finally {
-          preview.dispose();
-        }
+            image,
+          }),
+        );
       }
 
       await tf.nextFrame();

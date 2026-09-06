@@ -107,6 +107,32 @@ export function clampToColorSpace(image: tf.Tensor3D, space: ColorSpace): tf.Ten
 }
 
 /**
+ * Runs `consume` with an RGB view of an image held in `space`, and cleans up after it.
+ *
+ * This is how the live preview, and everything downstream of the canvas it draws to — the movie recorder,
+ * "save current step", the crash-recovery snapshot — see a picture rather than raw channels during an HSV
+ * run. In RGB the image is passed straight through, so the common path allocates nothing.
+ *
+ * The view is disposed as soon as `consume` returns, so callers must not retain it.
+ */
+export async function withRgbView<T>(
+  image: tf.Tensor3D,
+  space: ColorSpace,
+  consume: (rgb: tf.Tensor3D) => T | Promise<T>,
+): Promise<T> {
+  if (space === 'rgb') {
+    return consume(image);
+  }
+
+  const rgb = hsvToRgb(image);
+  try {
+    return await consume(rgb);
+  } finally {
+    rgb.dispose();
+  }
+}
+
+/**
  * Resizes an image held in `space`, doing the interpolation in RGB.
  *
  * Hue cannot be interpolated where it wraps: averaging 0.98 and 0.02 — two neighboring reds — gives 0.5,
