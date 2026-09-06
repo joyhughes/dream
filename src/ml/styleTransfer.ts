@@ -274,12 +274,25 @@ export async function runStyleTransfer(
 
   const shapes = computeOctaveShapes(workH, workW, params.octaves, params.octaveScale);
 
+  /**
+   * Wraps a tensor in a variable and releases the tensor.
+   *
+   * `tf.variable` shares its argument's data rather than copying it, and refcounts that data — but it
+   * leaves the original tensor alive and owned by whoever made it. Handing it a temporary and walking away
+   * therefore leaks one full-resolution tensor, once at the start and once at every octave boundary. It
+   * cost two per run at the default settings, which is the sort of thing that takes a phone tab out after
+   * a handful of them.
+   */
+  const asVariable = (value: tf.Tensor3D): tf.Variable => {
+    const variable = tf.variable(value, true, 'dream-style-generated');
+    value.dispose();
+    return variable;
+  };
+
   // `generated` is held in the working color space from here on; `contentImageAtOctave` stays RGB, since
   // it only ever feeds the network.
-  let generated = tf.variable(
+  let generated = asVariable(
     tf.tidy(() => fromRgb(tf.image.resizeBilinear(contentImage, shapes[0]) as tf.Tensor3D, params.colorSpace)),
-    true,
-    'dream-style-generated',
   );
   let optimizer = tf.train.adam(params.learningRate);
   let contentImageAtOctave = tf.tidy(
@@ -304,7 +317,7 @@ export async function runStyleTransfer(
           resizeInRgb(generated as unknown as tf.Tensor3D, params.colorSpace, [targetH, targetW]),
         );
         generated.dispose();
-        generated = tf.variable(upscaled, true, 'dream-style-generated');
+        generated = asVariable(upscaled);
 
         // Adam's momentum accumulators are keyed by variable name, not identity — since `generated` is
         // recreated at each octave's resolution, a fresh optimizer avoids reusing wrong-shaped moment tensors.
