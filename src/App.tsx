@@ -775,13 +775,22 @@ function App() {
 
         // Previews are composited through the mask and drawn into place, so the run is watched where it is
         // happening and the soft edge is visible throughout rather than appearing at the end.
+        //
+        // A preview arrives at whatever resolution its octave is working at, not the patch's — the first
+        // octave of a three-octave run is the patch divided by octaveScale squared. The whole-image path
+        // never had to care, since it hands previews straight to a canvas that resizes to fit; here they
+        // are blended against a fixed-size base, so they have to be brought up to it first.
         const drawPatchPreview = async (image: tf.Tensor3D) => {
           const canvas = canvasRef.current;
           if (!canvas) return;
 
-          const blended = tf.tidy(
-            () => tf.keep(basePatch.add(image.sub(basePatch).mul(mask))) as tf.Tensor3D,
-          );
+          const blended = tf.tidy(() => {
+            const sized =
+              image.shape[0] === bounds.height && image.shape[1] === bounds.width
+                ? image
+                : (tf.image.resizeBilinear(image, [bounds.height, bounds.width]) as tf.Tensor3D);
+            return tf.keep(basePatch.add(sized.sub(basePatch).mul(mask))) as tf.Tensor3D;
+          });
           try {
             const scratch = patchPreviewRef.current ?? (patchPreviewRef.current = document.createElement('canvas'));
             await renderTensorToCanvas(blended, scratch);
