@@ -37,6 +37,7 @@ import { DreamBrush } from './ml/brush';
 import { SelectionMask } from './ml/selection';
 import { BUILT_IN_TEMPLATES } from './templates/builtInTemplates';
 import type { CanvasTool } from './components/ResultCanvas';
+import type { SelectionMode } from './components/tools';
 import type {
   BrushSettings,
   SelectionSettings,
@@ -196,7 +197,10 @@ function App() {
   const lassoPointsRef = useRef<Array<{ x: number; y: number }>>([]);
   // The lasso only acts when the stroke ends, so whether it adds or subtracts is decided when the stroke
   // begins and held — releasing shift midway through drawing should not change what the outline does.
-  const lassoSubtractRef = useRef(false);
+  const lassoModeRef = useRef<SelectionMode>('replace');
+  // A stroke's mode is fixed when it starts. Re-reading the keys mid-stroke would let a plain stroke
+  // clear itself on every move, and would change what a lasso means after most of it had been drawn.
+  const strokeModeRef = useRef<SelectionMode>('replace');
   const toolRef = useRef<ToolId>('none');
   toolRef.current = tool;
   const paintContextRef = useRef({ mode, dreamParams, styleParams, presets, selectedPresetId, featureModel });
@@ -540,8 +544,10 @@ function App() {
   }, [processBrushPatch]);
 
   const handleToolStart = useCallback(
-    (x: number, y: number, shiftKey: boolean) => {
+    (x: number, y: number, mode: SelectionMode) => {
       const active = toolRef.current;
+      strokeModeRef.current = mode;
+
       if (active === 'paint') {
         handleBrushStart(x, y);
         return;
@@ -551,29 +557,30 @@ function App() {
         const selection = await ensureSelection();
         if (!selection) return;
 
+        // Replace means exactly that: whatever was selected goes, and this gesture starts over.
+        if (mode === 'replace') selection.clear();
+        const subtract = mode === 'subtract';
+
         if (active === 'wand' || active === 'bucket') {
           const pixels = await readPixels();
           if (!pixels) return;
           const { tolerance, contiguous } = selectionSettingsRef.current;
-          // A plain click starts a new selection; with shift it cuts the region out of the existing one,
-          // which is only meaningful if what is already there survives.
-          if (!shiftKey) selection.clear();
-          selection.wand(pixels, x, y, tolerance, contiguous, shiftKey);
+          selection.wand(pixels, x, y, tolerance, contiguous, subtract);
           touchSelection();
-          // The bucket is the wand plus the thing you were going to do next — but subtracting and then
-          // applying makes no sense, so with shift it only takes the region out of the selection.
-          if (active === 'bucket' && !shiftKey) await applyToSelection();
+          // The bucket is the wand plus the thing you were going to do next. With a modifier held the
+          // gesture is about the selection, so it stops there rather than flooding anything.
+          if (active === 'bucket' && mode === 'replace') await applyToSelection();
           return;
         }
 
         if (active === 'lasso') {
           lassoPointsRef.current = [{ x, y }];
-          lassoSubtractRef.current = shiftKey;
+          lassoModeRef.current = mode;
           return;
         }
 
         if (active === 'select-brush') {
-          selection.stamp(x, y, selectionSettingsRef.current.brushRadius, shiftKey);
+          selection.stamp(x, y, selectionSettingsRef.current.brushRadius, subtract);
           touchSelection();
         }
       })();
@@ -582,7 +589,7 @@ function App() {
   );
 
   const handleToolMove = useCallback(
-    (x: number, y: number, shiftKey: boolean) => {
+    (x: number, y: number) => {
       const active = toolRef.current;
       if (active === 'paint') {
         handleBrushMove(x, y);
@@ -602,9 +609,9 @@ function App() {
       }
 
       if (active === 'select-brush' && selectionRef.current) {
-        // Read every move rather than held from the stroke's start: with a brush, letting go of shift
-        // partway through and painting back over what you just erased is the natural thing to expect.
-        selectionRef.current.stamp(x, y, selectionSettingsRef.current.brushRadius, shiftKey);
+        // The stroke's own mode, not whatever is held now. A replace stroke cleared once when it began
+        // and adds from then on; re-reading the keys would have it wipe itself with every move.
+        selectionRef.current.stamp(x, y, selectionSettingsRef.current.brushRadius, strokeModeRef.current === 'subtract');
         touchSelection();
       }
     },
@@ -623,7 +630,7 @@ function App() {
       lassoPointsRef.current = [];
       // Releasing closes the outline back to where it started, which is what makes it a region.
       if (points.length >= 3 && selectionRef.current) {
-        selectionRef.current.fillPolygon(points, lassoSubtractRef.current);
+        selectionRef.current.fillPolygon(points, lassoModeRef.current === 'subtract');
       }
       touchSelection();
     }
@@ -973,10 +980,9 @@ function App() {
 
   const activeTool: CanvasTool = useMemo(
     () => ({
+      id: tool,
       cursorRadius:
         tool === 'paint' ? brushSettings.radius : tool === 'select-brush' ? selectionSettings.brushRadius : undefined,
-      // Painting is the one tool shift does nothing to: it draws the effect rather than a selection.
-      shiftSubtracts: tool !== 'none' && tool !== 'paint',
       onStart: handleToolStart,
       onMove: handleToolMove,
       onEnd: handleToolEnd,

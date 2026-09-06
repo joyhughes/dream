@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { TOOLS, modifierHint, toolDefinition } from './tools';
 import type {
   BrushSettings,
   ColorSpace,
@@ -250,35 +251,6 @@ export function VideoOptionsPanel({ fps, onFpsChange, isRunning }: VideoOptionsP
   );
 }
 
-const TOOLS: Array<{ id: ToolId; label: string; hint: string }> = [
-  { id: 'none', label: 'Off', hint: 'The image is just an image; the pointer does nothing to it.' },
-  {
-    id: 'paint',
-    label: 'Paint',
-    hint: 'Press and hold to build the effect up under the cursor — it keeps iterating for as long as you hold — and drag to paint a stroke. Confined to the selection when there is one.',
-  },
-  {
-    id: 'wand',
-    label: 'Magic wand',
-    hint: 'Click a pixel to select everything of a similar color, spreading out from where you clicked. Hold shift to cut that region out of the selection instead.',
-  },
-  {
-    id: 'bucket',
-    label: 'Paint bucket',
-    hint: 'The wand and Apply in one click: finds the region under the cursor and floods the effect into it. Hold shift to take the region out of the selection without applying anything.',
-  },
-  {
-    id: 'lasso',
-    label: 'Lasso',
-    hint: 'Drag to draw a freehand outline; releasing closes it and selects what is inside. Hold shift as you start the stroke to cut the enclosed area out instead.',
-  },
-  {
-    id: 'select-brush',
-    label: 'Selection brush',
-    hint: 'Paint the selection on by hand. Hold shift to rub it back out; let go and you are painting again.',
-  },
-];
-
 interface BrushPanelProps {
   tool: ToolId;
   onToolChange: (tool: ToolId) => void;
@@ -300,21 +272,34 @@ export function BrushPanel({
   isRunning,
 }: BrushPanelProps) {
   const set = (next: Partial<BrushSettings>) => onSettingsChange({ ...settings, ...next });
-  const active = TOOLS.find((t) => t.id === tool);
+  const active = toolDefinition(tool);
 
   return (
     <div className="slider-panel">
-      <label className="field-row" title="What the pointer does on the image. Selections made with the wand, bucket, lasso or selection brush confine everything else — Paint and Apply both stay inside them.">
-        <span>Tool</span>
-        <select value={tool} onChange={(e) => onToolChange(e.target.value as ToolId)} disabled={isRunning}>
-          {TOOLS.map((entry) => (
-            <option key={entry.id} value={entry.id}>
-              {entry.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      {active && tool !== 'none' && <p className="field-hint">{active.hint}</p>}
+      <div
+        className="tool-row"
+        role="radiogroup"
+        aria-label="Tool"
+        title="What the pointer does on the image. Selections made with the wand, bucket, lasso or selection brush confine everything else — Generate, Paint and Apply all stay inside them."
+      >
+        {TOOLS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            role="radio"
+            aria-checked={tool === entry.id}
+            aria-label={entry.label}
+            title={`${entry.label} — ${entry.hint}`}
+            className={`tool-button${tool === entry.id ? ' tool-button--active' : ''}`}
+            disabled={isRunning}
+            onClick={() => onToolChange(entry.id)}
+          >
+            {entry.icon}
+          </button>
+        ))}
+      </div>
+      {tool !== 'none' && <p className="field-hint">{active.hint}</p>}
+      {modifierHint(tool) && <p className="field-hint field-hint--keys">{modifierHint(tool)}</p>}
       {tool !== 'none' && !available && (
         <p className="field-hint field-hint--warn">
           Load a photo first — the brush needs a still image to paint on, and cannot work on a video.
@@ -465,8 +450,8 @@ export function SelectionPanel({
         {isBusy
           ? 'Working…'
           : hasSelection
-            ? `${(selectedFraction * 100).toFixed(1)}% of the image selected. Generate, Paint and Apply all stay inside it. Hold shift to subtract.`
-            : 'Nothing selected — tools act on the whole image. Hold shift with any selection tool to subtract.'}
+            ? `${(selectedFraction * 100).toFixed(1)}% of the image selected. Generate, Paint and Apply all stay inside it.`
+            : 'Nothing selected — tools act on the whole image.'}
       </p>
     </div>
   );
@@ -537,10 +522,10 @@ export function SliderPanel({
             label="Pattern scale"
             value={dreamParams.patternScale}
             min={1}
-            max={4}
+            max={10}
             step={0.25}
             disabled={isRunning}
-            tooltip="How large the drawn patterns come out. The network draws its shapes at one fixed size, so the only way to make them bigger in the finished image is to give it fewer pixels to draw on — that is what this does, working at a coarser resolution and enlarging the result. 1 is the finest detail the network can produce; higher values give bigger, softer motifs and run faster. Octaves spread detail across a range of scales; this sets where that range sits, and it is the brush's scale control too."
+            tooltip="How large the drawn patterns come out. The network draws its shapes at one fixed size, so the only way to make them bigger in the finished image is to give it fewer pixels to draw on — that is what this does, working at a coarser resolution and enlarging the result. 1 is the finest detail the network can produce; higher values give bigger, softer motifs and run faster. There is a ceiling: once the working image is smaller than the network's own view, raising this further stops making patterns bigger. Octaves spread detail across a range of scales; this sets where that range sits, and it is the brush's scale control too."
             onChange={(v) => onDreamParamsChange({ ...dreamParams, patternScale: v })}
           />
           <Slider
@@ -620,10 +605,10 @@ export function SliderPanel({
             label="Pattern scale"
             value={styleParams.patternScale}
             min={1}
-            max={4}
+            max={10}
             step={0.25}
             disabled={isRunning}
-            tooltip="How large the template's motifs come out. Style statistics are taken from crops of the template, and the size of that crop against the size of the content tile it is matched to decides the scale the motif is reproduced at — a smaller view of the template makes its patterns land larger. 1 keeps motifs near their size in the original template; higher values enlarge them. This is the brush's scale control too."
+            tooltip="How large the template's motifs come out. The optimizer draws through a fixed-size view of the network, so the only lever on how big a motif lands is how many pixels it is given to work on — this runs at a coarser resolution and enlarges the result. 1 is the finest the network can draw; higher values give bigger, softer motifs and run faster. There is a ceiling: once the working image is smaller than the network's own view, raising this further stops making motifs bigger. This is the brush's scale control too."
             onChange={(v) => onStyleParamsChange({ ...styleParams, patternScale: v })}
           />
           <Slider

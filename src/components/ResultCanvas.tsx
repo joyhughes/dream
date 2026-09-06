@@ -1,20 +1,28 @@
 import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
-import type { EngineStatus } from '../types';
+import type { EngineStatus, ToolId } from '../types';
+import { selectionModeFor, toolDefinition, type SelectionMode } from './tools';
 
-/**
- * What the pointer does on the canvas right now. Supplied only when a tool is active.
- *
- * `shiftKey` is reported rather than interpreted: what a modifier means is the app's decision, not
- * something the canvas should know.
- */
+/** What the pointer does on the canvas right now. Supplied only when a tool is active. */
 export interface CanvasTool {
+  id: ToolId;
   /** Draws a circle at the pointer for tools that act over a radius; omitted for click and path tools. */
   cursorRadius?: number;
-  /** True when this tool does something different with shift held, so the cursor can show which mode it is in. */
-  shiftSubtracts?: boolean;
-  onStart: (x: number, y: number, shiftKey: boolean) => void;
-  onMove: (x: number, y: number, shiftKey: boolean) => void;
+  onStart: (x: number, y: number, mode: SelectionMode) => void;
+  onMove: (x: number, y: number, mode: SelectionMode) => void;
   onEnd: () => void;
+}
+
+/** The badge riding beside the pointer: which tool is in hand, and what the held keys will make it do. */
+function ToolCursorBadge({ id, mode }: { id: ToolId; mode: SelectionMode }) {
+  const definition = toolDefinition(id);
+  const showsMode = definition.usesSelectionModes && mode !== 'replace';
+
+  return (
+    <span className={`tool-cursor tool-cursor--${mode}`}>
+      {definition.icon}
+      {showsMode && <span className="tool-cursor-mode">{mode === 'add' ? '+' : '\u2212'}</span>}
+    </span>
+  );
 }
 
 interface ResultCanvasProps {
@@ -59,10 +67,11 @@ export function ResultCanvas({
   tool,
 }: ResultCanvasProps) {
   const stageRef = useRef<HTMLDivElement>(null);
-  const [cursor, setCursor] = useState<{ left: number; top: number; size: number } | null>(null);
-  // Tracked on hover as well as during a stroke, so the cursor says which mode a click would be in
-  // before it is committed to.
-  const [subtracting, setSubtracting] = useState(false);
+  // Tracked on hover as well as during a stroke, so the cursor says which tool is in hand and which mode a
+  // click would be in before it is committed to.
+  const [cursor, setCursor] = useState<{ left: number; top: number; size: number; mode: SelectionMode } | null>(
+    null,
+  );
 
   // Once a run finishes, the completed result is shown as a plain <img> from a Blob URL instead of the live
   // canvas — a GPU process reset (common after the computer sleeps) can silently wipe a GPU-composited canvas
@@ -88,20 +97,21 @@ export function ResultCanvas({
 
   const updateCursor = useCallback(
     (event: ReactPointerEvent) => {
-      setSubtracting(event.shiftKey);
       const canvas = canvasRef.current;
-      if (!tool?.cursorRadius || !stageRef.current || !canvas) {
+      if (!tool || !stageRef.current || !canvas) {
         setCursor(null);
         return;
       }
 
       const { scale } = displayGeometry(canvas);
       const stageRect = stageRef.current.getBoundingClientRect();
-      const size = tool.cursorRadius * 2 * scale;
+      // Radius tools draw their real footprint; the rest get a zero-size anchor the badge hangs off.
+      const size = (tool.cursorRadius ?? 0) * 2 * scale;
       setCursor({
         left: event.clientX - stageRect.left - size / 2,
         top: event.clientY - stageRect.top - size / 2,
         size,
+        mode: selectionModeFor(event.shiftKey, event.altKey),
       });
     },
     [tool, canvasRef],
@@ -115,14 +125,14 @@ export function ResultCanvas({
     // Capture so a stroke that wanders off the canvas keeps reporting, and releases cleanly.
     event.currentTarget.setPointerCapture(event.pointerId);
     updateCursor(event);
-    tool.onStart(point.x, point.y, event.shiftKey);
+    tool.onStart(point.x, point.y, selectionModeFor(event.shiftKey, event.altKey));
   };
 
   const handlePointerMove = (event: ReactPointerEvent) => {
     if (!tool) return;
     updateCursor(event);
     const point = toImagePoint(event);
-    if (point) tool.onMove(point.x, point.y, event.shiftKey);
+    if (point) tool.onMove(point.x, point.y, selectionModeFor(event.shiftKey, event.altKey));
   };
 
   const handlePointerUp = (event: ReactPointerEvent) => {
@@ -136,8 +146,7 @@ export function ResultCanvas({
   const stageClass = [
     'result-stage',
     tool ? 'result-stage--tool' : null,
-    tool?.cursorRadius ? 'result-stage--radius-cursor' : null,
-    tool?.shiftSubtracts && subtracting ? 'result-stage--subtract' : null,
+    tool ? 'result-stage--hide-pointer' : null,
   ]
     .filter(Boolean)
     .join(' ');
@@ -158,11 +167,14 @@ export function ResultCanvas({
       )}
       {/* Sized and positioned exactly like the image below it, so mask pixels land on image pixels. */}
       <canvas ref={overlayRef} className="result-canvas selection-overlay" />
-      {cursor && (
+      {tool && cursor && (
         <div
-          className={`brush-cursor${tool?.shiftSubtracts && subtracting ? ' brush-cursor--subtract' : ''}`}
+          className={`tool-cursor-anchor tool-cursor-anchor--${cursor.mode}`}
           style={{ left: cursor.left, top: cursor.top, width: cursor.size, height: cursor.size }}
-        />
+        >
+          {cursor.size > 0 && <span className="brush-cursor" />}
+          <ToolCursorBadge id={tool.id} mode={cursor.mode} />
+        </div>
       )}
     </div>
   );

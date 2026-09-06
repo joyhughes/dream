@@ -257,17 +257,22 @@ export async function runStyleTransfer(
     }
   }
 
-  // How much of the template one network view covers, which is what sets the size of the motifs that come
-  // back out. A view of the template C pixels wide, matched against a content tile T pixels wide,
-  // reproduces a motif of size M at M·T/C — so a smaller view means larger motifs, and pattern scale
-  // divides. See `computeStyleGramTargets` for why the view is a crop rather than the whole template.
-  const templateCrop = Math.max(16, Math.round(params.tileSize / Math.max(1, params.patternScale)));
-
   // Style statistics don't depend on octave resolution, so these are computed once up front.
-  const styleGramTargets = computeStyleGramTargets(featureModel, styleImage, styleLayers, templateCrop);
+  const styleGramTargets = computeStyleGramTargets(featureModel, styleImage, styleLayers, params.tileSize);
 
   const [h, w] = contentImage.shape;
-  const shapes = computeOctaveShapes(h, w, params.octaves, params.octaveScale);
+
+  // Pattern scale works the same way it does for DeepDream: optimize at a coarser resolution and enlarge
+  // the result. Sizing the template's crop instead — matching a C-wide view of the template against a
+  // T-wide content tile to reproduce motifs at M·T/C — is the tempting derivation and does not hold. The
+  // optimizer can only draw what the network's fixed-size view can represent, which pins the largest
+  // feature it can express to the tile's own scale; asking for a motif beyond that returns mush rather
+  // than a bigger motif. Measured, that route moved the output by 0.3% to 4% with no monotone trend.
+  const scale = Math.max(1, params.patternScale);
+  const workH = Math.max(8, Math.round(h / scale));
+  const workW = Math.max(8, Math.round(w / scale));
+
+  const shapes = computeOctaveShapes(workH, workW, params.octaves, params.octaveScale);
 
   // `generated` is held in the working color space from here on; `contentImageAtOctave` stays RGB, since
   // it only ever feeds the network.
@@ -404,8 +409,13 @@ export async function runStyleTransfer(
       }
     }
 
-    // Callers always get RGB back, whatever space the run worked in.
-    return tf.tidy(() => tf.keep(toRgb(generated as unknown as tf.Tensor3D, params.colorSpace))) as tf.Tensor3D;
+    // Callers always get RGB back, whatever space the run worked in, and at the size they handed in.
+    return tf.tidy(() => {
+      const rgb = toRgb(generated as unknown as tf.Tensor3D, params.colorSpace);
+      return rgb.shape[0] === h && rgb.shape[1] === w
+        ? (tf.keep(rgb) as tf.Tensor3D)
+        : (tf.keep(tf.image.resizeBilinear(rgb, [h, w])) as tf.Tensor3D);
+    });
   } finally {
     generated.dispose();
     contentImageAtOctave.dispose();
