@@ -1,12 +1,19 @@
 import { useCallback, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import type { EngineStatus } from '../types';
 
-/** What the pointer does on the canvas right now. Supplied only when a tool is active. */
+/**
+ * What the pointer does on the canvas right now. Supplied only when a tool is active.
+ *
+ * `shiftKey` is reported rather than interpreted: what a modifier means is the app's decision, not
+ * something the canvas should know.
+ */
 export interface CanvasTool {
   /** Draws a circle at the pointer for tools that act over a radius; omitted for click and path tools. */
   cursorRadius?: number;
-  onStart: (x: number, y: number) => void;
-  onMove: (x: number, y: number) => void;
+  /** True when this tool does something different with shift held, so the cursor can show which mode it is in. */
+  shiftSubtracts?: boolean;
+  onStart: (x: number, y: number, shiftKey: boolean) => void;
+  onMove: (x: number, y: number, shiftKey: boolean) => void;
   onEnd: () => void;
 }
 
@@ -53,6 +60,9 @@ export function ResultCanvas({
 }: ResultCanvasProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState<{ left: number; top: number; size: number } | null>(null);
+  // Tracked on hover as well as during a stroke, so the cursor says which mode a click would be in
+  // before it is committed to.
+  const [subtracting, setSubtracting] = useState(false);
 
   // Once a run finishes, the completed result is shown as a plain <img> from a Blob URL instead of the live
   // canvas — a GPU process reset (common after the computer sleeps) can silently wipe a GPU-composited canvas
@@ -78,6 +88,7 @@ export function ResultCanvas({
 
   const updateCursor = useCallback(
     (event: ReactPointerEvent) => {
+      setSubtracting(event.shiftKey);
       const canvas = canvasRef.current;
       if (!tool?.cursorRadius || !stageRef.current || !canvas) {
         setCursor(null);
@@ -104,14 +115,14 @@ export function ResultCanvas({
     // Capture so a stroke that wanders off the canvas keeps reporting, and releases cleanly.
     event.currentTarget.setPointerCapture(event.pointerId);
     updateCursor(event);
-    tool.onStart(point.x, point.y);
+    tool.onStart(point.x, point.y, event.shiftKey);
   };
 
   const handlePointerMove = (event: ReactPointerEvent) => {
     if (!tool) return;
     updateCursor(event);
     const point = toImagePoint(event);
-    if (point) tool.onMove(point.x, point.y);
+    if (point) tool.onMove(point.x, point.y, event.shiftKey);
   };
 
   const handlePointerUp = (event: ReactPointerEvent) => {
@@ -126,6 +137,7 @@ export function ResultCanvas({
     'result-stage',
     tool ? 'result-stage--tool' : null,
     tool?.cursorRadius ? 'result-stage--radius-cursor' : null,
+    tool?.shiftSubtracts && subtracting ? 'result-stage--subtract' : null,
   ]
     .filter(Boolean)
     .join(' ');
@@ -148,7 +160,7 @@ export function ResultCanvas({
       <canvas ref={overlayRef} className="result-canvas selection-overlay" />
       {cursor && (
         <div
-          className="brush-cursor"
+          className={`brush-cursor${tool?.shiftSubtracts && subtracting ? ' brush-cursor--subtract' : ''}`}
           style={{ left: cursor.left, top: cursor.top, width: cursor.size, height: cursor.size }}
         />
       )}

@@ -260,15 +260,23 @@ const TOOLS: Array<{ id: ToolId; label: string; hint: string }> = [
   {
     id: 'wand',
     label: 'Magic wand',
-    hint: 'Click a pixel to select everything of a similar color, spreading out from where you clicked.',
+    hint: 'Click a pixel to select everything of a similar color, spreading out from where you clicked. Hold shift to cut that region out of the selection instead.',
   },
   {
     id: 'bucket',
     label: 'Paint bucket',
-    hint: 'The wand and Apply in one click: finds the region under the cursor and floods the effect into it.',
+    hint: 'The wand and Apply in one click: finds the region under the cursor and floods the effect into it. Hold shift to take the region out of the selection without applying anything.',
   },
-  { id: 'lasso', label: 'Lasso', hint: 'Drag to draw a freehand outline; releasing closes it and selects what is inside.' },
-  { id: 'select-brush', label: 'Selection brush', hint: 'Paint the selection on by hand, like a brush that adds to what is selected.' },
+  {
+    id: 'lasso',
+    label: 'Lasso',
+    hint: 'Drag to draw a freehand outline; releasing closes it and selects what is inside. Hold shift as you start the stroke to cut the enclosed area out instead.',
+  },
+  {
+    id: 'select-brush',
+    label: 'Selection brush',
+    hint: 'Paint the selection on by hand. Hold shift to rub it back out; let go and you are painting again.',
+  },
 ];
 
 interface BrushPanelProps {
@@ -457,8 +465,8 @@ export function SelectionPanel({
         {isBusy
           ? 'Working…'
           : hasSelection
-            ? `${(selectedFraction * 100).toFixed(1)}% of the image selected. Paint and Apply both stay inside it.`
-            : 'Nothing selected — tools act on the whole image.'}
+            ? `${(selectedFraction * 100).toFixed(1)}% of the image selected. Paint and Apply both stay inside it. Hold shift to subtract.`
+            : 'Nothing selected — tools act on the whole image. Hold shift with any selection tool to subtract.'}
       </p>
     </div>
   );

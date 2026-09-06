@@ -192,6 +192,9 @@ function App() {
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const selectionRef = useRef<SelectionMask | null>(null);
   const lassoPointsRef = useRef<Array<{ x: number; y: number }>>([]);
+  // The lasso only acts when the stroke ends, so whether it adds or subtracts is decided when the stroke
+  // begins and held — releasing shift midway through drawing should not change what the outline does.
+  const lassoSubtractRef = useRef(false);
   const toolRef = useRef<ToolId>('none');
   toolRef.current = tool;
   const paintContextRef = useRef({ mode, dreamParams, styleParams, presets, selectedPresetId, featureModel });
@@ -535,7 +538,7 @@ function App() {
   }, [processBrushPatch]);
 
   const handleToolStart = useCallback(
-    (x: number, y: number) => {
+    (x: number, y: number, shiftKey: boolean) => {
       const active = toolRef.current;
       if (active === 'paint') {
         handleBrushStart(x, y);
@@ -550,21 +553,25 @@ function App() {
           const pixels = await readPixels();
           if (!pixels) return;
           const { tolerance, contiguous } = selectionSettingsRef.current;
-          selection.clear();
-          selection.wand(pixels, x, y, tolerance, contiguous);
+          // A plain click starts a new selection; with shift it cuts the region out of the existing one,
+          // which is only meaningful if what is already there survives.
+          if (!shiftKey) selection.clear();
+          selection.wand(pixels, x, y, tolerance, contiguous, shiftKey);
           touchSelection();
-          // The bucket is the wand plus the thing you were going to do next.
-          if (active === 'bucket') await applyToSelection();
+          // The bucket is the wand plus the thing you were going to do next — but subtracting and then
+          // applying makes no sense, so with shift it only takes the region out of the selection.
+          if (active === 'bucket' && !shiftKey) await applyToSelection();
           return;
         }
 
         if (active === 'lasso') {
           lassoPointsRef.current = [{ x, y }];
+          lassoSubtractRef.current = shiftKey;
           return;
         }
 
         if (active === 'select-brush') {
-          selection.stamp(x, y, selectionSettingsRef.current.brushRadius, false);
+          selection.stamp(x, y, selectionSettingsRef.current.brushRadius, shiftKey);
           touchSelection();
         }
       })();
@@ -573,7 +580,7 @@ function App() {
   );
 
   const handleToolMove = useCallback(
-    (x: number, y: number) => {
+    (x: number, y: number, shiftKey: boolean) => {
       const active = toolRef.current;
       if (active === 'paint') {
         handleBrushMove(x, y);
@@ -593,7 +600,9 @@ function App() {
       }
 
       if (active === 'select-brush' && selectionRef.current) {
-        selectionRef.current.stamp(x, y, selectionSettingsRef.current.brushRadius, false);
+        // Read every move rather than held from the stroke's start: with a brush, letting go of shift
+        // partway through and painting back over what you just erased is the natural thing to expect.
+        selectionRef.current.stamp(x, y, selectionSettingsRef.current.brushRadius, shiftKey);
         touchSelection();
       }
     },
@@ -612,7 +621,7 @@ function App() {
       lassoPointsRef.current = [];
       // Releasing closes the outline back to where it started, which is what makes it a region.
       if (points.length >= 3 && selectionRef.current) {
-        selectionRef.current.fillPolygon(points);
+        selectionRef.current.fillPolygon(points, lassoSubtractRef.current);
       }
       touchSelection();
     }
@@ -884,6 +893,8 @@ function App() {
     () => ({
       cursorRadius:
         tool === 'paint' ? brushSettings.radius : tool === 'select-brush' ? selectionSettings.brushRadius : undefined,
+      // Painting is the one tool shift does nothing to: it draws the effect rather than a selection.
+      shiftSubtracts: tool !== 'none' && tool !== 'paint',
       onStart: handleToolStart,
       onMove: handleToolMove,
       onEnd: handleToolEnd,

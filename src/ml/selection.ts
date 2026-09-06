@@ -55,14 +55,25 @@ export class SelectionMask {
    *
    * Tolerance is a distance in RGB, normalized so 1 spans the full diagonal of the color cube and the
    * slider behaves the same whatever the image.
+   *
+   * `subtract` takes the region back out of the selection instead of putting it in. Which pixels the region
+   * covers is decided by color either way — what is already selected has no bearing on where it reaches.
    */
-  wand(pixels: Float32Array, seedX: number, seedY: number, tolerance: number, contiguous: boolean) {
+  wand(
+    pixels: Float32Array,
+    seedX: number,
+    seedY: number,
+    tolerance: number,
+    contiguous: boolean,
+    subtract = false,
+  ) {
     const { width, height } = this;
     const seedIndex = (Math.floor(seedY) * width + Math.floor(seedX)) * 3;
     if (seedIndex < 0 || seedIndex >= pixels.length) return;
 
     const [seedR, seedG, seedB] = [pixels[seedIndex], pixels[seedIndex + 1], pixels[seedIndex + 2]];
     const limit = tolerance * Math.sqrt(3);
+    const weight = subtract ? 0 : 1;
 
     const matches = (index: number): boolean => {
       const dr = pixels[index * 3] - seedR;
@@ -73,7 +84,7 @@ export class SelectionMask {
 
     if (!contiguous) {
       for (let i = 0; i < width * height; i++) {
-        if (matches(i)) this.weights[i] = 1;
+        if (matches(i)) this.weights[i] = weight;
       }
       return;
     }
@@ -89,7 +100,7 @@ export class SelectionMask {
       visited[index] = 1;
       if (!matches(index)) continue;
 
-      this.weights[index] = 1;
+      this.weights[index] = weight;
 
       const x = index % width;
       const y = (index - x) / width;
@@ -104,10 +115,13 @@ export class SelectionMask {
    * Lasso. Fills the interior of a freehand outline by the even-odd rule: a pixel is inside when a ray
    * cast from it crosses the outline an odd number of times, which handles a path that crosses itself
    * without needing to know where it did.
+   *
+   * `subtract` clears the enclosed area rather than selecting it.
    */
-  fillPolygon(points: Array<{ x: number; y: number }>) {
+  fillPolygon(points: Array<{ x: number; y: number }>, subtract = false) {
     if (points.length < 3) return;
 
+    const weight = subtract ? 0 : 1;
     const minY = Math.max(0, Math.floor(Math.min(...points.map((p) => p.y))));
     const maxY = Math.min(this.height - 1, Math.ceil(Math.max(...points.map((p) => p.y))));
 
@@ -130,14 +144,14 @@ export class SelectionMask {
         const from = Math.max(0, Math.ceil(crossings[i] - 0.5));
         const to = Math.min(this.width - 1, Math.floor(crossings[i + 1] - 0.5));
         for (let x = from; x <= to; x++) {
-          this.weights[y * this.width + x] = 1;
+          this.weights[y * this.width + x] = weight;
         }
       }
     }
   }
 
-  /** Selection brush. Paints a round dab into the mask, or takes it back out when `erase`. */
-  stamp(centerX: number, centerY: number, radius: number, erase: boolean) {
+  /** Selection brush. Paints a round dab into the mask, or takes it back out when `subtract`. */
+  stamp(centerX: number, centerY: number, radius: number, subtract: boolean) {
     const left = Math.max(0, Math.floor(centerX - radius));
     const right = Math.min(this.width - 1, Math.ceil(centerX + radius));
     const top = Math.max(0, Math.floor(centerY - radius));
@@ -150,7 +164,7 @@ export class SelectionMask {
         if (dx * dx + dy * dy > radius * radius) continue;
 
         const index = y * this.width + x;
-        this.weights[index] = erase ? 0 : 1;
+        this.weights[index] = subtract ? 0 : 1;
       }
     }
   }

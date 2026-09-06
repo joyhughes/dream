@@ -265,6 +265,17 @@ body {
   pointer-events: none;
 }
 
+/* Shift subtracts, and says so before the click rather than after it. */
+.brush-cursor--subtract {
+  border-style: dashed;
+  border-color: #ffb27a;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), inset 0 0 12px rgba(255, 178, 122, 0.18);
+}
+
+.result-stage--subtract:not(.result-stage--radius-cursor) {
+  cursor: crosshair;
+}
+
 .field-hint--warn {
   color: #ffb27a;
 }
