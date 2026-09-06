@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type {
+  BrushSettings,
   ColorSpace,
   DreamParams,
   DreamPreset,
@@ -247,6 +248,79 @@ export function VideoOptionsPanel({ fps, onFpsChange, isRunning }: VideoOptionsP
   );
 }
 
+interface BrushPanelProps {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  settings: BrushSettings;
+  onSettingsChange: (settings: BrushSettings) => void;
+  /** False when there is nothing to paint on — no photo yet, a video, or a run in flight. */
+  available: boolean;
+  isPainting: boolean;
+  isRunning: boolean;
+}
+
+export function BrushPanel({
+  enabled,
+  onEnabledChange,
+  settings,
+  onSettingsChange,
+  available,
+  isPainting,
+  isRunning,
+}: BrushPanelProps) {
+  const set = (next: Partial<BrushSettings>) => onSettingsChange({ ...settings, ...next });
+
+  return (
+    <div className="slider-panel">
+      <Toggle
+        label="Paint the effect in by hand"
+        checked={enabled}
+        disabled={isRunning}
+        tooltip="Turns the image into a canvas you brush on. Press and hold to build the effect up where the cursor is — it keeps iterating for as long as you hold — and drag to paint a stroke. Everything the mode is set up to do applies, at the size of a dab, so the preset, the regularizers and the pattern scale all carry over. Generate still works on the whole image."
+        onChange={onEnabledChange}
+      />
+      {enabled && !available && (
+        <p className="field-hint field-hint--warn">
+          Load a photo first — the brush needs a still image to paint on, and cannot work on a video.
+        </p>
+      )}
+      <Slider
+        label="Brush size"
+        value={settings.radius}
+        min={8}
+        max={400}
+        step={4}
+        disabled={isRunning}
+        tooltip="Radius of the dab, in pixels of the image being worked on. Bigger dabs cover ground faster but take proportionally longer to compute, so a very large brush stops feeling responsive — the whole point of a small one is that it can finish inside a frame."
+        onChange={(v) => set({ radius: v })}
+      />
+      <Slider
+        label="Feathering"
+        value={settings.feather}
+        min={0}
+        max={1}
+        step={0.05}
+        disabled={isRunning}
+        tooltip="How much of the radius is spent fading out. 0 gives a hard edge that shows the outline of every dab; 1 fades from the center out, so the effect only ever tints and blends invisibly into the image behind. Around 0.5 keeps a definite mark while hiding the seam."
+        onChange={(v) => set({ feather: v })}
+      />
+      <Slider
+        label="Steps per dab"
+        value={settings.stepsPerDab}
+        min={1}
+        max={20}
+        step={1}
+        disabled={isRunning}
+        tooltip="How many iterations run each time the brush is applied. More builds the effect up faster while you hold, but each dab takes longer, so the brush responds more coarsely to being moved. Low values give fine control over how far it goes; high values are quicker to reach a strong effect."
+        onChange={(v) => set({ stepsPerDab: v })}
+      />
+      <p className="field-hint">
+        {isPainting ? 'Painting…' : 'Hold in place to keep iterating; release to stop. Download saves the painted image.'}
+      </p>
+    </div>
+  );
+}
+
 interface SliderPanelProps {
   mode: Mode;
   dreamParams: DreamParams;
@@ -307,6 +381,16 @@ export function SliderPanel({
             disabled={isRunning}
             tooltip="How strongly each step nudges the image toward the target pattern. Higher values build the effect faster and more dramatically, but can quickly turn noisy or overcooked."
             onChange={(v) => onDreamParamsChange({ ...dreamParams, stepSize: v })}
+          />
+          <Slider
+            label="Pattern scale"
+            value={dreamParams.patternScale}
+            min={1}
+            max={4}
+            step={0.25}
+            disabled={isRunning}
+            tooltip="How large the drawn patterns come out. The network draws its shapes at one fixed size, so the only way to make them bigger in the finished image is to give it fewer pixels to draw on — that is what this does, working at a coarser resolution and enlarging the result. 1 is the finest detail the network can produce; higher values give bigger, softer motifs and run faster. Octaves spread detail across a range of scales; this sets where that range sits, and it is the brush's scale control too."
+            onChange={(v) => onDreamParamsChange({ ...dreamParams, patternScale: v })}
           />
           <Slider
             label="Tile size"
@@ -380,6 +464,16 @@ export function SliderPanel({
             disabled={isRunning}
             tooltip="How many optimization steps run at each octave. More steps refine the result further, but increase processing time proportionally."
             onChange={(v) => onStyleParamsChange({ ...styleParams, stepsPerOctave: v })}
+          />
+          <Slider
+            label="Pattern scale"
+            value={styleParams.patternScale}
+            min={1}
+            max={4}
+            step={0.25}
+            disabled={isRunning}
+            tooltip="How large the template's motifs come out. Style statistics are taken from crops of the template, and the size of that crop against the size of the content tile it is matched to decides the scale the motif is reproduced at — a smaller view of the template makes its patterns land larger. 1 keeps motifs near their size in the original template; higher values enlarge them. This is the brush's scale control too."
+            onChange={(v) => onStyleParamsChange({ ...styleParams, patternScale: v })}
           />
           <Slider
             label="Tile size"

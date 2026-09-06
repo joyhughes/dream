@@ -225,6 +225,24 @@ body {
   line-height: 1.2;
 }
 
+.result-stage--painting {
+  cursor: none;
+  touch-action: none;
+}
+
+/* Follows the pointer at the brush's real size, so what will be painted is visible before committing. */
+.brush-cursor {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), inset 0 0 12px rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+
+.field-hint--warn {
+  color: #ffb27a;
+}
+
 .toggle-row {
   display: flex;
   align-items: center;

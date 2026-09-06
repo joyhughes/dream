@@ -2,7 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ImageDropzone } from './components/ImageDropzone';
 import { BuiltInTemplatePicker } from './components/BuiltInTemplatePicker';
 import { ModeTabs } from './components/ModeTabs';
-import { PresetPanel, SliderPanel, VideoOptionsPanel, ActionsBar, RegularizerPanel } from './components/ControlsPanel';
+import {
+  PresetPanel,
+  SliderPanel,
+  VideoOptionsPanel,
+  ActionsBar,
+  RegularizerPanel,
+  BrushPanel,
+} from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
 import { HoverPopup } from './components/HoverPopup';
 import { initializeML, ensureBackendHealthy } from './ml/tfSetup';
@@ -25,8 +32,17 @@ import { PauseController } from './ml/pauseController';
 import { MovieRecorder, isMovieRecordingSupported } from './ml/movieRecorder';
 import { encodeFrameSequence } from './ml/frameEncoding';
 import { VideoFrameSource } from './ml/videoFrames';
+import { DreamBrush } from './ml/brush';
 import { BUILT_IN_TEMPLATES } from './templates/builtInTemplates';
-import type { DreamParams, DreamPreset, EngineStatus, ImageRegularizers, Mode, StyleParams } from './types';
+import type {
+  BrushSettings,
+  DreamParams,
+  DreamPreset,
+  EngineStatus,
+  ImageRegularizers,
+  Mode,
+  StyleParams,
+} from './types';
 import { AppFrame, ControlGroup } from './simui';
 import { FeatureNetworkPicker } from './components/FeatureNetworkPicker';
 import { tf } from './ml/tfSetup';
@@ -80,6 +96,7 @@ const DEFAULT_DREAM_PARAMS: DreamParams = {
   colorSpace: 'rgb',
   colorPreservation: 0,
   normalizeSaturation: false,
+  patternScale: 1,
   regularizers: NO_REGULARIZERS,
 };
 
@@ -95,7 +112,14 @@ const DEFAULT_STYLE_PARAMS: StyleParams = {
   colorSpace: 'rgb',
   colorPreservation: 0,
   normalizeSaturation: false,
+  patternScale: 1,
   regularizers: NO_REGULARIZERS,
+};
+
+const DEFAULT_BRUSH: BrushSettings = {
+  radius: 64,
+  feather: 0.5,
+  stepsPerDab: 4,
 };
 
 function App() {
@@ -125,11 +149,27 @@ function App() {
   const [videoFps, setVideoFps] = useState(8);
   const [frameProgress, setFrameProgress] = useState<{ index: number; total: number } | null>(null);
 
+  const [brushEnabled, setBrushEnabled] = useState(false);
+  const [brushSettings, setBrushSettings] = useState<BrushSettings>(DEFAULT_BRUSH);
+  const [isPainting, setIsPainting] = useState(false);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pauseControllerRef = useRef<PauseController | null>(null);
   const movieRecorderRef = useRef<MovieRecorder | null>(null);
   const lastProgressPersistRef = useRef(0);
+
+  // The image being painted on, and the pointer state driving it. All refs: the paint loop reads these
+  // every tick and must see the current values, not the ones captured when the stroke began.
+  const brushRef = useRef<DreamBrush | null>(null);
+  const brushTemplateRef = useRef<tf.Tensor3D | null>(null);
+  const paintingRef = useRef(false);
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
+  const brushSettingsRef = useRef(brushSettings);
+  brushSettingsRef.current = brushSettings;
+  const isRunningRef = useRef(false);
+  const paintContextRef = useRef({ mode, dreamParams, styleParams, presets, selectedPresetId, featureModel });
+  paintContextRef.current = { mode, dreamParams, styleParams, presets, selectedPresetId, featureModel };
   // Whether the user has picked their own image yet, which decides who wins if the restore below
   // finishes after they've already moved on.
   const hasOwnBaseImageRef = useRef(false);
@@ -217,6 +257,9 @@ function App() {
 
   const handleBaseFile = useCallback((file: File) => {
     hasOwnBaseImageRef.current = true;
+    // A new photo means the painted image is of the wrong thing entirely.
+    brushRef.current?.dispose();
+    brushRef.current = null;
     setBaseFile(file);
     setBasePreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -233,6 +276,8 @@ function App() {
   }, []);
 
   const handleTemplateFile = useCallback((file: File) => {
+    brushTemplateRef.current?.dispose();
+    brushTemplateRef.current = null;
     setTemplateFile(file);
     setTemplatePreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -270,6 +315,127 @@ function App() {
   }, []);
 
   const isBaseVideo = !!baseFile && baseFile.type.startsWith('video/');
+
+  /** Throws the painted image away, so the next stroke starts from whatever the app is showing now. */
+  const discardBrush = useCallback(() => {
+    brushRef.current?.dispose();
+    brushRef.current = null;
+    brushTemplateRef.current?.dispose();
+    brushTemplateRef.current = null;
+  }, []);
+
+  /**
+   * The image the brush paints on: the last result if there is one, otherwise the picked photo. Built once
+   * per painting session and kept until something replaces the image underneath it.
+   */
+  const ensureBrush = useCallback(async (): Promise<DreamBrush | null> => {
+    if (brushRef.current) return brushRef.current;
+    if (!baseFile || isBaseVideo) return null;
+
+    const source = resultBlob ? new File([resultBlob], 'result.png', { type: 'image/png' }) : baseFile;
+    const img = await loadImageFromFile(source);
+    const tensor = imageToWorkingTensor(img, getDeviceLimits().workingMaxDimension);
+    try {
+      brushRef.current = new DreamBrush(tensor);
+    } finally {
+      tensor.dispose();
+    }
+
+    if (canvasRef.current) {
+      await renderTensorToCanvas(brushRef.current.current, canvasRef.current);
+    }
+    return brushRef.current;
+  }, [baseFile, isBaseVideo, resultBlob]);
+
+  /** Runs the current mode over one brush patch. Whatever Generate would do, at the size of a dab. */
+  const processBrushPatch = useCallback(async (patch: tf.Tensor3D): Promise<tf.Tensor3D> => {
+    const context = paintContextRef.current;
+    const steps = Math.max(1, Math.round(brushSettingsRef.current.stepsPerDab));
+    if (!context.featureModel) throw new Error('Feature model is not loaded.');
+
+    // One octave, always: the brush's scale control is pattern scale, which sets the size of what gets
+    // drawn directly. An octave pyramid inside a dab would spread detail across scales the user did not ask
+    // for, and cost several passes per tick where the budget is one frame.
+    if (context.mode === 'deepdream') {
+      const preset = context.presets.find((p) => p.id === context.selectedPresetId);
+      if (!preset) throw new Error('No preset selected.');
+      return runDeepDream(patch, {
+        featureModel: context.featureModel,
+        preset,
+        params: { ...context.dreamParams, octaves: 1, stepsPerOctave: steps },
+      });
+    }
+
+    if (!brushTemplateRef.current) throw new Error('No style template loaded.');
+    return runStyleTransfer(patch, brushTemplateRef.current, {
+      featureModel: context.featureModel,
+      params: { ...context.styleParams, octaves: 1, stepsPerOctave: steps },
+    });
+  }, []);
+
+  /**
+   * Keeps dabbing at wherever the pointer is until it lifts, so holding still builds the effect up in one
+   * place while moving paints a stroke. One dab is in flight at a time — a dab takes as long as it takes,
+   * and queueing them on pointer events would run further and further behind the cursor.
+   */
+  const runPaintLoop = useCallback(async () => {
+    const brush = await ensureBrush();
+    if (!brush) {
+      paintingRef.current = false;
+      setIsPainting(false);
+      return;
+    }
+
+    try {
+      while (paintingRef.current) {
+        const point = pointerRef.current;
+        if (!point) break;
+
+        await brush.dab(point.x, point.y, brushSettingsRef.current, processBrushPatch);
+        if (canvasRef.current) {
+          await renderTensorToCanvas(brush.current, canvasRef.current);
+        }
+        await tf.nextFrame();
+      }
+    } catch (err) {
+      console.error('Painting failed:', err);
+      setEngineStatus({ phase: 'error', message: describeRunError(err) });
+    } finally {
+      paintingRef.current = false;
+      setIsPainting(false);
+    }
+
+    // The stroke is the unit of work worth keeping: this is what Download saves and what a killed tab
+    // comes back to.
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        setResultBlob(blob);
+        setHasResult(true);
+        void saveLastResultBlob(blob);
+      }, 'image/png');
+    }
+  }, [ensureBrush, processBrushPatch]);
+
+  const handleBrushStart = useCallback(
+    (x: number, y: number) => {
+      if (paintingRef.current || isRunningRef.current) return;
+      pointerRef.current = { x, y };
+      paintingRef.current = true;
+      setIsPainting(true);
+      void runPaintLoop();
+    },
+    [runPaintLoop],
+  );
+
+  const handleBrushMove = useCallback((x: number, y: number) => {
+    if (paintingRef.current) pointerRef.current = { x, y };
+  }, []);
+
+  const handleBrushEnd = useCallback(() => {
+    paintingRef.current = false;
+  }, []);
 
   const canGenerate =
     engineStatus.phase !== 'loading-model' &&
@@ -433,6 +599,9 @@ function App() {
         // full-resolution float32 buffer, so holding it kept a run's worth of GPU memory alive right
         // through the next run.
         result.dispose();
+        // The brush repaints from the new result on its next stroke rather than from the stale image.
+        brushRef.current?.dispose();
+        brushRef.current = null;
         setHasResult(true);
         setEngineStatus({ phase: 'done' });
 
@@ -504,7 +673,42 @@ function App() {
   }, [resultBlob, mode]);
 
   const isRunning = engineStatus.phase === 'running';
+  isRunningRef.current = isRunning;
   const recordingSupported = isMovieRecordingSupported();
+
+  // The brush needs a still photo to paint on and a network to paint with; style transfer also needs its
+  // template, loaded here so the first dab of a stroke isn't the one that pays for it.
+  const canBrush = !!baseFile && !isBaseVideo && !!featureModel && !isRunning;
+
+  useEffect(() => {
+    if (!brushEnabled || mode !== 'style' || !templateFile) return;
+
+    let cancelled = false;
+    (async () => {
+      const img = await loadImageFromFile(templateFile);
+      const tensor = imageToWorkingTensor(img, getDeviceLimits().styleWorkingMaxDimension);
+      if (cancelled) {
+        tensor.dispose();
+        return;
+      }
+      brushTemplateRef.current?.dispose();
+      brushTemplateRef.current = tensor;
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [brushEnabled, mode, templateFile]);
+
+  // Switching the brush on shows the canvas instead of the still image, so the image has to be on the
+  // canvas by then — otherwise the viewport goes blank until the first dab lands.
+  useEffect(() => {
+    if (!brushEnabled || !canBrush) return;
+    void ensureBrush();
+  }, [brushEnabled, canBrush, ensureBrush]);
+
+  // Painting owns tensors that outlive any one render, so they have to be released when the app is.
+  useEffect(() => discardBrush, [discardBrush]);
 
   return (
     <AppFrame
@@ -520,6 +724,16 @@ function App() {
           status={engineStatus}
           resultImageUrl={resultImageUrl}
           basePreviewUrl={isBaseVideo ? undefined : basePreviewUrl}
+          brush={
+            brushEnabled && canBrush
+              ? {
+                  radius: brushSettings.radius,
+                  onStart: handleBrushStart,
+                  onMove: handleBrushMove,
+                  onEnd: handleBrushEnd,
+                }
+              : undefined
+          }
         />
       }
       controls={
@@ -601,6 +815,18 @@ function App() {
               onDreamParamsChange={setDreamParams}
               styleParams={styleParams}
               onStyleParamsChange={setStyleParams}
+              isRunning={isRunning}
+            />
+          </ControlGroup>
+
+          <ControlGroup title="Brush" defaultOpen={false}>
+            <BrushPanel
+              enabled={brushEnabled}
+              onEnabledChange={setBrushEnabled}
+              settings={brushSettings}
+              onSettingsChange={setBrushSettings}
+              available={canBrush}
+              isPainting={isPainting}
               isRunning={isRunning}
             />
           </ControlGroup>

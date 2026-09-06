@@ -65,7 +65,16 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
   }
 
   const [h, w] = baseImage.shape;
-  const shapes = computeOctaveShapes(h, w, params.octaves, params.octaveScale);
+
+  // Pattern scale works by drawing at a coarser resolution and enlarging the result. The network draws
+  // features at a size fixed by its own input, so the only way to make them come out bigger in the final
+  // image is to give it fewer pixels to draw on — the same lever octaves pull, held at one setting instead
+  // of swept across several. Octaves still spread detail across scales; this sets where that range sits.
+  const scale = Math.max(1, params.patternScale);
+  const workH = Math.max(8, Math.round(h / scale));
+  const workW = Math.max(8, Math.round(w / scale));
+
+  const shapes = computeOctaveShapes(workH, workW, params.octaves, params.octaveScale);
 
   const { colorSpace } = params;
 
@@ -89,7 +98,13 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
   // Callers always get RGB back, whatever space the run worked in — including on an abort, which can
   // land anywhere in the loop below.
   const finish = (): tf.Tensor3D => {
-    const rgb = toRgb(current, colorSpace);
+    const rgb = tf.tidy(() => {
+      const asRgb = toRgb(current, colorSpace);
+      // Back to the caller's resolution. At scale 1 the sizes already agree and this is a no-op.
+      return asRgb.shape[0] === h && asRgb.shape[1] === w
+        ? tf.keep(asRgb)
+        : (tf.keep(tf.image.resizeBilinear(asRgb, [h, w])) as tf.Tensor3D);
+    });
     current.dispose();
     reference?.dispose();
     targetSaturation?.dispose();

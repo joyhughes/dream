@@ -46,6 +46,12 @@ export interface DreamParams {
   colorPreservation: number;
   /** Holds the image's average saturation at the source's, so it cannot drift over a run. */
   normalizeSaturation: boolean;
+  /**
+   * How large the drawn patterns come out, as a multiplier. 1 is the finest the network can draw; higher
+   * values give bigger, coarser motifs. Independent of `octaves`, which spreads detail across many scales
+   * at once — this sets the scale itself. See `patternScale` handling in each algorithm.
+   */
+  patternScale: number;
   regularizers: ImageRegularizers;
 }
 
@@ -64,7 +70,23 @@ export interface StyleParams {
   colorPreservation: number;
   /** Holds the image's average saturation at the source's, so it cannot drift over a run. */
   normalizeSaturation: boolean;
+  /**
+   * How large the drawn patterns come out, as a multiplier. 1 is the finest the network can draw; higher
+   * values give bigger, coarser motifs. Independent of `octaves`, which spreads detail across many scales
+   * at once — this sets the scale itself. See `patternScale` handling in each algorithm.
+   */
+  patternScale: number;
   regularizers: ImageRegularizers;
+}
+
+/** How the brush lays the effect down. Sizes are in working-image pixels. */
+export interface BrushSettings {
+  /** Radius of the dab, in pixels of the image being painted. */
+  radius: number;
+  /** Fraction of the radius spent fading out, so the dab blends into what is behind it. 0 is a hard edge. */
+  feather: number;
+  /** Iterations run per tick while the brush is held down. More is faster to build up, coarser to control. */
+  stepsPerDab: number;
 }
 
 export interface ProgressUpdate {

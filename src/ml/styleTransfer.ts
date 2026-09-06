@@ -255,8 +255,14 @@ export async function runStyleTransfer(
     }
   }
 
+  // How much of the template one network view covers, which is what sets the size of the motifs that come
+  // back out. A view of the template C pixels wide, matched against a content tile T pixels wide,
+  // reproduces a motif of size M at M·T/C — so a smaller view means larger motifs, and pattern scale
+  // divides. See `computeStyleGramTargets` for why the view is a crop rather than the whole template.
+  const templateCrop = Math.max(16, Math.round(params.tileSize / Math.max(1, params.patternScale)));
+
   // Style statistics don't depend on octave resolution, so these are computed once up front.
-  const styleGramTargets = computeStyleGramTargets(featureModel, styleImage, styleLayers, params.tileSize);
+  const styleGramTargets = computeStyleGramTargets(featureModel, styleImage, styleLayers, templateCrop);
 
   const [h, w] = contentImage.shape;
   const shapes = computeOctaveShapes(h, w, params.octaves, params.octaveScale);
