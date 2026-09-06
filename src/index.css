@@ -225,6 +225,32 @@ body {
   line-height: 1.2;
 }
 
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+}
+
+.toggle-row input[type='checkbox'] {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: #6a6dff;
+  cursor: pointer;
+}
+
+.toggle-row:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.toggle-row input[type='checkbox']:disabled {
+  cursor: not-allowed;
+}
+
 .preset-panel,
 .slider-panel,
 .video-options-panel {

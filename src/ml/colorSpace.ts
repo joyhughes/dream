@@ -107,6 +107,57 @@ export function clampToColorSpace(image: tf.Tensor3D, space: ColorSpace): tf.Ten
 }
 
 /**
+ * The image's average saturation, as a scalar left on the GPU.
+ *
+ * Deliberately not read back to JavaScript: a per-step `dataSync` would stall the pipeline on a readback,
+ * and readbacks are exactly what has been killing tabs on phones. The value is only ever used to build
+ * another tensor, so it never has to leave the device.
+ */
+export function meanSaturation(image: tf.Tensor3D, space: ColorSpace): tf.Scalar {
+  return tf.tidy(() => {
+    if (space === 'hsv') {
+      const [, saturation] = splitChannels(image);
+      return saturation.mean() as tf.Scalar;
+    }
+
+    // (max − min) / max, the definition, without paying for a full conversion.
+    const value = image.max(2);
+    return value.sub(image.min(2)).div(value.add(EPSILON)).mean() as tf.Scalar;
+  });
+}
+
+/**
+ * Rescales saturation so the image's average matches `targetMean`, leaving hue and brightness alone.
+ *
+ * Unlike `preserveColor`, which pins each pixel's color to where it started, this fixes only the average:
+ * the run stays free to make one region more vivid and another less, and only the drift of the whole image
+ * is taken away. That drift is what shows up as washing out over a long run, and as saturation wandering
+ * between the frames of a video, where each frame is its own run and would otherwise land somewhere
+ * slightly different.
+ *
+ * In RGB this is done directly as `rgb' = V − (V − rgb)·k` with V the pixel's own maximum, which is the
+ * transform that scales saturation while holding hue and value exactly — cheaper and more precise than a
+ * round trip through HSV.
+ */
+export function normalizeSaturation(image: tf.Tensor3D, targetMean: tf.Scalar, space: ColorSpace): tf.Tensor3D {
+  return tf.tidy(() => {
+    const current = meanSaturation(image, space);
+
+    // A fully desaturated image has no color left to rescale, and dividing by its zero would blow the
+    // image out to fully saturated noise. The comparison stays on the GPU so no readback is needed.
+    const scale = tf.where(current.greater(EPSILON), targetMean.div(current.add(EPSILON)), tf.onesLike(current));
+
+    if (space === 'hsv') {
+      const [hue, saturation, value] = splitChannels(image);
+      return tf.concat([hue, tf.clipByValue(saturation.mul(scale), 0, 1), value], 2) as tf.Tensor3D;
+    }
+
+    const value = image.max(2, true);
+    return tf.clipByValue(value.sub(value.sub(image).mul(scale)), 0, 1) as tf.Tensor3D;
+  });
+}
+
+/**
  * Pulls an image's hue and saturation back toward a reference, leaving its brightness alone.
  *
  * Gradient ascent has no reason to respect the colors it started with, and in HSV it actively spends them:

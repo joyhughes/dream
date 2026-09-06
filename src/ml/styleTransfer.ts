@@ -3,7 +3,17 @@ import type { DiscoveredLayer, FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient, computeTileGrid, effectiveTileSize, type TileSpec } from './tiledGradient';
 import { applyImageRegularizers, hasActiveImageRegularizer } from './regularizers';
-import { clampToColorSpace, fromRgb, hsvToRgb, preserveColor, resizeInRgb, toRgb, withRgbView } from './colorSpace';
+import {
+  clampToColorSpace,
+  fromRgb,
+  hsvToRgb,
+  meanSaturation,
+  normalizeSaturation,
+  preserveColor,
+  resizeInRgb,
+  toRgb,
+  withRgbView,
+} from './colorSpace';
 import type { PauseController } from './pauseController';
 import type { StyleParams } from '../types';
 
@@ -264,6 +274,11 @@ export async function runStyleTransfer(
   );
   let contentTargets = computeContentTargets(featureModel, contentLayer, contentImageAtOctave, params.tileSize);
 
+  // Measured from the content image, which is what the result is meant to still look like the color of.
+  const targetSaturation = params.normalizeSaturation
+    ? (tf.tidy(() => tf.keep(meanSaturation(contentImage, 'rgb'))) as tf.Scalar)
+    : null;
+
   try {
     octaveLoop: for (let octave = 0; octave < shapes.length; octave++) {
       const [targetH, targetW] = shapes[octave];
@@ -342,6 +357,15 @@ export async function runStyleTransfer(
           preserved.dispose();
         }
 
+        // After preservation, so it has the final say on the average.
+        if (targetSaturation) {
+          const normalized = tf.tidy(() =>
+            tf.keep(normalizeSaturation(generated as unknown as tf.Tensor3D, targetSaturation, params.colorSpace)),
+          );
+          generated.assign(normalized);
+          normalized.dispose();
+        }
+
         if (onProgress && (step % 5 === 0 || step === params.stepsPerOctave - 1)) {
           // Converted for display: `generated` holds the working color space, and painting HSV channels
           // as if they were RGB shows colors that are nowhere in the image.
@@ -365,6 +389,7 @@ export async function runStyleTransfer(
   } finally {
     generated.dispose();
     contentImageAtOctave.dispose();
+    targetSaturation?.dispose();
     contentTargets.forEach((target) => target.dispose());
     styleGramTargets.forEach((g) => g.dispose());
     optimizer.dispose();

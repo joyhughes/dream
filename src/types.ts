@@ -44,6 +44,8 @@ export interface DreamParams {
   colorSpace: ColorSpace;
   /** How strongly the original hue and saturation are restored after each step. 0 disables it. */
   colorPreservation: number;
+  /** Holds the image's average saturation at the source's, so it cannot drift over a run. */
+  normalizeSaturation: boolean;
   regularizers: ImageRegularizers;
 }
 
@@ -60,6 +62,8 @@ export interface StyleParams {
   colorSpace: ColorSpace;
   /** How strongly the content image's hue and saturation are restored after each step. 0 disables it. */
   colorPreservation: number;
+  /** Holds the image's average saturation at the source's, so it cannot drift over a run. */
+  normalizeSaturation: boolean;
   regularizers: ImageRegularizers;
 }
 

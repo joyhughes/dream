@@ -167,6 +167,28 @@ function Slider({ label, value, min, max, step, tooltip, onChange, disabled }: S
   );
 }
 
+interface ToggleProps {
+  label: string;
+  checked: boolean;
+  tooltip: string;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+}
+
+function Toggle({ label, checked, tooltip, onChange, disabled }: ToggleProps) {
+  return (
+    <label className="toggle-row" title={tooltip}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span>{label}</span>
+    </label>
+  );
+}
+
 interface PresetPanelProps {
   mode: Mode;
   presets: DreamPreset[];
@@ -423,6 +445,16 @@ export function RegularizerPanel({
     }
   };
 
+  const normalizesSaturation = isDream ? dreamParams.normalizeSaturation : styleParams.normalizeSaturation;
+
+  const setNormalizeSaturation = (next: boolean) => {
+    if (isDream) {
+      onDreamParamsChange({ ...dreamParams, normalizeSaturation: next });
+    } else {
+      onStyleParamsChange({ ...styleParams, normalizeSaturation: next });
+    }
+  };
+
   const setColorSpace = (next: ColorSpace) => {
     if (isDream) {
       onDreamParamsChange({ ...dreamParams, colorSpace: next });
@@ -456,6 +488,13 @@ export function RegularizerPanel({
         disabled={isRunning}
         tooltip="Restores the original image's hue and saturation after every step, keeping only the brightness the run drew. Because it applies every step its effect compounds, so the useful range is the low end: 0.1 cuts color drift to about a fifth without touching how much structure appears, 0.2 to a twelfth, and 1 locks color to the original exactly so the effect shows up purely as light and shade. Works in either color space, so an RGB run can keep its colors too. Hue is blended the short way around the wheel, so reds either side of the wrap stay red."
         onChange={setColorPreservation}
+      />
+      <Toggle
+        label="Hold average saturation"
+        checked={normalizesSaturation}
+        disabled={isRunning}
+        tooltip="Rescales saturation after every step so the image's average matches the one it started with. Unlike Color preservation, which pins each pixel's color where it was, this fixes only the average — the run stays free to make one area more vivid and another less, and only the drift of the whole image is taken away. That drift is what shows up as washing out over a long run, and as saturation wandering between the frames of a video, where every frame is a separate run that would otherwise land somewhere slightly different."
+        onChange={setNormalizeSaturation}
       />
       {mode === 'style' && (
         <Slider

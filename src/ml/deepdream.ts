@@ -8,7 +8,17 @@ import {
   laplacianNormalize,
   totalVariationGradient,
 } from './regularizers';
-import { clampToColorSpace, fromRgb, hsvToRgb, preserveColor, resizeInRgb, toRgb, withRgbView } from './colorSpace';
+import {
+  clampToColorSpace,
+  fromRgb,
+  hsvToRgb,
+  meanSaturation,
+  normalizeSaturation,
+  preserveColor,
+  resizeInRgb,
+  toRgb,
+  withRgbView,
+} from './colorSpace';
 import type { PauseController } from './pauseController';
 import type { ColorSpace, DreamParams, DreamPreset } from '../types';
 
@@ -70,12 +80,19 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
   // restore toward.
   let reference: tf.Tensor3D | null = null;
 
+  // A single scalar, measured once from the input and held on the GPU for the whole run. Average
+  // saturation barely moves with scale, so one measurement serves every octave.
+  const targetSaturation = params.normalizeSaturation
+    ? (tf.tidy(() => tf.keep(meanSaturation(baseImage, 'rgb'))) as tf.Scalar)
+    : null;
+
   // Callers always get RGB back, whatever space the run worked in — including on an abort, which can
   // land anywhere in the loop below.
   const finish = (): tf.Tensor3D => {
     const rgb = toRgb(current, colorSpace);
     current.dispose();
     reference?.dispose();
+    targetSaturation?.dispose();
     return rgb;
   };
 
@@ -144,13 +161,22 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
         current = regularized;
       }
 
-      // Applied last, so it constrains whatever the step and the regularizers between them produced.
+      // These two constrain whatever the step and the regularizers between them produced, so they run
+      // last — and normalization runs after preservation, so it has the final say on the average.
       if (reference) {
         const preserved = tf.tidy(
           () => tf.keep(preserveColor(current, reference!, params.colorPreservation, colorSpace)) as tf.Tensor3D,
         );
         current.dispose();
         current = preserved;
+      }
+
+      if (targetSaturation) {
+        const normalized = tf.tidy(
+          () => tf.keep(normalizeSaturation(current, targetSaturation, colorSpace)) as tf.Tensor3D,
+        );
+        current.dispose();
+        current = normalized;
       }
 
       if (onProgress && (step % previewEvery === 0 || step === params.stepsPerOctave - 1)) {
