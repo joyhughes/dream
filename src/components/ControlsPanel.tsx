@@ -2,6 +2,8 @@ import { useState, type ReactNode } from 'react';
 import type {
   BrushSettings,
   ColorSpace,
+  SelectionSettings,
+  ToolId,
   DreamParams,
   DreamPreset,
   EngineStatus,
@@ -248,20 +250,41 @@ export function VideoOptionsPanel({ fps, onFpsChange, isRunning }: VideoOptionsP
   );
 }
 
+const TOOLS: Array<{ id: ToolId; label: string; hint: string }> = [
+  { id: 'none', label: 'Off', hint: 'The image is just an image; the pointer does nothing to it.' },
+  {
+    id: 'paint',
+    label: 'Paint',
+    hint: 'Press and hold to build the effect up under the cursor — it keeps iterating for as long as you hold — and drag to paint a stroke. Confined to the selection when there is one.',
+  },
+  {
+    id: 'wand',
+    label: 'Magic wand',
+    hint: 'Click a pixel to select everything of a similar color, spreading out from where you clicked.',
+  },
+  {
+    id: 'bucket',
+    label: 'Paint bucket',
+    hint: 'The wand and Apply in one click: finds the region under the cursor and floods the effect into it.',
+  },
+  { id: 'lasso', label: 'Lasso', hint: 'Drag to draw a freehand outline; releasing closes it and selects what is inside.' },
+  { id: 'select-brush', label: 'Selection brush', hint: 'Paint the selection on by hand, like a brush that adds to what is selected.' },
+];
+
 interface BrushPanelProps {
-  enabled: boolean;
-  onEnabledChange: (enabled: boolean) => void;
+  tool: ToolId;
+  onToolChange: (tool: ToolId) => void;
   settings: BrushSettings;
   onSettingsChange: (settings: BrushSettings) => void;
-  /** False when there is nothing to paint on — no photo yet, a video, or a run in flight. */
+  /** False when there is nothing to work on — no photo yet, a video, or a run in flight. */
   available: boolean;
   isPainting: boolean;
   isRunning: boolean;
 }
 
 export function BrushPanel({
-  enabled,
-  onEnabledChange,
+  tool,
+  onToolChange,
   settings,
   onSettingsChange,
   available,
@@ -269,21 +292,28 @@ export function BrushPanel({
   isRunning,
 }: BrushPanelProps) {
   const set = (next: Partial<BrushSettings>) => onSettingsChange({ ...settings, ...next });
+  const active = TOOLS.find((t) => t.id === tool);
 
   return (
     <div className="slider-panel">
-      <Toggle
-        label="Paint the effect in by hand"
-        checked={enabled}
-        disabled={isRunning}
-        tooltip="Turns the image into a canvas you brush on. Press and hold to build the effect up where the cursor is — it keeps iterating for as long as you hold — and drag to paint a stroke. Everything the mode is set up to do applies, at the size of a dab, so the preset, the regularizers and the pattern scale all carry over. Generate still works on the whole image."
-        onChange={onEnabledChange}
-      />
-      {enabled && !available && (
+      <label className="field-row" title="What the pointer does on the image. Selections made with the wand, bucket, lasso or selection brush confine everything else — Paint and Apply both stay inside them.">
+        <span>Tool</span>
+        <select value={tool} onChange={(e) => onToolChange(e.target.value as ToolId)} disabled={isRunning}>
+          {TOOLS.map((entry) => (
+            <option key={entry.id} value={entry.id}>
+              {entry.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {active && tool !== 'none' && <p className="field-hint">{active.hint}</p>}
+      {tool !== 'none' && !available && (
         <p className="field-hint field-hint--warn">
           Load a photo first — the brush needs a still image to paint on, and cannot work on a video.
         </p>
       )}
+      {tool === 'paint' && (
+        <>
       <Slider
         label="Brush size"
         value={settings.radius}
@@ -316,6 +346,119 @@ export function BrushPanel({
       />
       <p className="field-hint">
         {isPainting ? 'Painting…' : 'Hold in place to keep iterating; release to stop. Download saves the painted image.'}
+      </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface SelectionPanelProps {
+  tool: ToolId;
+  settings: SelectionSettings;
+  onSettingsChange: (settings: SelectionSettings) => void;
+  /** Share of the image currently selected, for the summary line. */
+  selectedFraction: number;
+  isBusy: boolean;
+  isRunning: boolean;
+  onApply: () => void;
+  onInvert: () => void;
+  onClear: () => void;
+}
+
+export function SelectionPanel({
+  tool,
+  settings,
+  onSettingsChange,
+  selectedFraction,
+  isBusy,
+  isRunning,
+  onApply,
+  onInvert,
+  onClear,
+}: SelectionPanelProps) {
+  if (tool === 'none') return null;
+
+  const set = (next: Partial<SelectionSettings>) => onSettingsChange({ ...settings, ...next });
+  const hasSelection = selectedFraction > 0;
+
+  return (
+    <div className="slider-panel selection-panel">
+      {(tool === 'wand' || tool === 'bucket') && (
+        <>
+          <Slider
+            label="Tolerance"
+            value={settings.tolerance}
+            min={0}
+            max={1}
+            step={0.01}
+            disabled={isRunning}
+            tooltip="How different a pixel may be from the one you click and still be taken. 0 takes only an exact color match; higher values reach across shading and gradients, and near 1 the whole image goes in one click. Measured as distance in RGB, scaled so the number means the same thing on any image."
+            onChange={(v) => set({ tolerance: v })}
+          />
+          <Toggle
+            label="Contiguous"
+            checked={settings.contiguous}
+            disabled={isRunning}
+            tooltip="On, the selection spreads outward from the pixel you clicked and stops at anything too different, so it takes one connected region. Off, it takes every pixel in the image of a similar color no matter where it is — useful for something like every patch of sky through a row of trees."
+            onChange={(v) => set({ contiguous: v })}
+          />
+        </>
+      )}
+      {tool === 'select-brush' && (
+        <Slider
+          label="Selection brush size"
+          value={settings.brushRadius}
+          min={4}
+          max={300}
+          step={4}
+          disabled={isRunning}
+          tooltip="Radius of the selection brush, in pixels of the image being worked on."
+          onChange={(v) => set({ brushRadius: v })}
+        />
+      )}
+      <Slider
+        label="Selection feather"
+        value={settings.feather}
+        min={0}
+        max={80}
+        step={1}
+        disabled={isRunning}
+        tooltip="How far the selection's edge fades, in pixels either side of it. 0 applies the effect right up to a hard boundary, which shows as a visible cut; a wider fade blends what is applied smoothly into the image around it. The wash on the image shows the softened edge, so what you see is what will be applied."
+        onChange={(v) => set({ feather: v })}
+      />
+      <div className="controls-actions">
+        <button
+          className="btn btn--primary"
+          onClick={onApply}
+          disabled={!hasSelection || isBusy || isRunning}
+          title="Runs the current mode over the selected area only, blended in through the feathered edge."
+        >
+          Apply to selection
+        </button>
+        <button
+          className="btn btn--secondary"
+          onClick={onInvert}
+          disabled={isBusy || isRunning}
+          title="Selects everything that is not selected, and vice versa."
+        >
+          Invert
+        </button>
+        <button
+          className="btn btn--secondary"
+          onClick={onClear}
+          disabled={!hasSelection || isBusy || isRunning}
+          title="Drops the selection, so tools act on the whole image again."
+        >
+          Clear
+        </button>
+      </div>
+      <p className="field-hint">
+        {isBusy
+          ? 'Working…'
+          : hasSelection
+            ? `${(selectedFraction * 100).toFixed(1)}% of the image selected. Paint and Apply both stay inside it.`
+            : 'Nothing selected — tools act on the whole image.'}
       </p>
     </div>
   );

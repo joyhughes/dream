@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ImageDropzone } from './components/ImageDropzone';
 import { BuiltInTemplatePicker } from './components/BuiltInTemplatePicker';
 import { ModeTabs } from './components/ModeTabs';
@@ -9,6 +9,7 @@ import {
   ActionsBar,
   RegularizerPanel,
   BrushPanel,
+  SelectionPanel,
 } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
 import { HoverPopup } from './components/HoverPopup';
@@ -33,9 +34,13 @@ import { MovieRecorder, isMovieRecordingSupported } from './ml/movieRecorder';
 import { encodeFrameSequence } from './ml/frameEncoding';
 import { VideoFrameSource } from './ml/videoFrames';
 import { DreamBrush } from './ml/brush';
+import { SelectionMask } from './ml/selection';
 import { BUILT_IN_TEMPLATES } from './templates/builtInTemplates';
+import type { CanvasTool } from './components/ResultCanvas';
 import type {
   BrushSettings,
+  SelectionSettings,
+  ToolId,
   DreamParams,
   DreamPreset,
   EngineStatus,
@@ -122,6 +127,13 @@ const DEFAULT_BRUSH: BrushSettings = {
   stepsPerDab: 4,
 };
 
+const DEFAULT_SELECTION: SelectionSettings = {
+  tolerance: 0.15,
+  contiguous: true,
+  feather: 12,
+  brushRadius: 40,
+};
+
 function App() {
   const [mode, setMode] = useState<Mode>('deepdream');
 
@@ -149,9 +161,13 @@ function App() {
   const [videoFps, setVideoFps] = useState(8);
   const [frameProgress, setFrameProgress] = useState<{ index: number; total: number } | null>(null);
 
-  const [brushEnabled, setBrushEnabled] = useState(false);
+  const [tool, setTool] = useState<ToolId>('none');
   const [brushSettings, setBrushSettings] = useState<BrushSettings>(DEFAULT_BRUSH);
+  const [selectionSettings, setSelectionSettings] = useState<SelectionSettings>(DEFAULT_SELECTION);
   const [isPainting, setIsPainting] = useState(false);
+  // Bumped whenever the mask changes, purely to drive a redraw of the overlay and the panel's summary —
+  // the mask itself lives in a ref, since it is written pixel by pixel and must not clone on every stroke.
+  const [selectionVersion, setSelectionVersion] = useState(0);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -167,7 +183,15 @@ function App() {
   const pointerRef = useRef<{ x: number; y: number } | null>(null);
   const brushSettingsRef = useRef(brushSettings);
   brushSettingsRef.current = brushSettings;
+  const selectionSettingsRef = useRef(selectionSettings);
+  selectionSettingsRef.current = selectionSettings;
   const isRunningRef = useRef(false);
+
+  const overlayRef = useRef<HTMLCanvasElement>(null);
+  const selectionRef = useRef<SelectionMask | null>(null);
+  const lassoPointsRef = useRef<Array<{ x: number; y: number }>>([]);
+  const toolRef = useRef<ToolId>('none');
+  toolRef.current = tool;
   const paintContextRef = useRef({ mode, dreamParams, styleParams, presets, selectedPresetId, featureModel });
   paintContextRef.current = { mode, dreamParams, styleParams, presets, selectedPresetId, featureModel };
   // Whether the user has picked their own image yet, which decides who wins if the restore below
@@ -257,9 +281,10 @@ function App() {
 
   const handleBaseFile = useCallback((file: File) => {
     hasOwnBaseImageRef.current = true;
-    // A new photo means the painted image is of the wrong thing entirely.
+    // A new photo means the painted image, and any selection over it, are of the wrong thing entirely.
     brushRef.current?.dispose();
     brushRef.current = null;
+    selectionRef.current = null;
     setBaseFile(file);
     setBasePreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -391,7 +416,12 @@ function App() {
         const point = pointerRef.current;
         if (!point) break;
 
-        await brush.dab(point.x, point.y, brushSettingsRef.current, processBrushPatch);
+        const selection = selectionRef.current;
+        const restrictTo =
+          selection && !selection.isEmpty()
+            ? selection.feathered(selectionSettingsRef.current.feather)
+            : undefined;
+        await brush.dab(point.x, point.y, brushSettingsRef.current, processBrushPatch, restrictTo);
         if (canvasRef.current) {
           await renderTensorToCanvas(brush.current, canvasRef.current);
         }
@@ -436,6 +466,169 @@ function App() {
   const handleBrushEnd = useCallback(() => {
     paintingRef.current = false;
   }, []);
+
+  /** The selection, sized to the image being worked on. Created on first use. */
+  const ensureSelection = useCallback(async (): Promise<SelectionMask | null> => {
+    const brush = await ensureBrush();
+    if (!brush) return null;
+
+    const [height, width] = brush.shape;
+    if (!selectionRef.current || selectionRef.current.width !== width || selectionRef.current.height !== height) {
+      selectionRef.current = new SelectionMask(width, height);
+    }
+    return selectionRef.current;
+  }, [ensureBrush]);
+
+  const touchSelection = useCallback(() => setSelectionVersion((version) => version + 1), []);
+
+  /**
+   * The wand and the bucket both need the image's pixels on the CPU to trace a region. That is a readback,
+   * but a click's worth — not something inside a loop.
+   */
+  const readPixels = useCallback(async (): Promise<Float32Array | null> => {
+    const brush = await ensureBrush();
+    return brush ? (brush.current.dataSync() as Float32Array) : null;
+  }, [ensureBrush]);
+
+  /** Runs the current mode over the selection's box, blended through its feathered edge. */
+  const applyToSelection = useCallback(async () => {
+    const selection = selectionRef.current;
+    const brush = brushRef.current;
+    if (!selection || !brush || selection.isEmpty() || paintingRef.current || isRunningRef.current) return;
+
+    const feather = selectionSettingsRef.current.feather;
+    const bounds = selection.bounds(Math.ceil(feather) + 1);
+    if (!bounds) return;
+
+    paintingRef.current = true;
+    setIsPainting(true);
+    try {
+      const mask = selection.toTensor(bounds, feather);
+      try {
+        await brush.applyPatch(
+          { y: bounds.y, x: bounds.x, height: bounds.height, width: bounds.width },
+          mask,
+          processBrushPatch,
+        );
+      } finally {
+        mask.dispose();
+      }
+
+      if (canvasRef.current) {
+        await renderTensorToCanvas(brush.current, canvasRef.current);
+        canvasRef.current.toBlob((blob) => {
+          if (!blob) return;
+          setResultBlob(blob);
+          setHasResult(true);
+          void saveLastResultBlob(blob);
+        }, 'image/png');
+      }
+    } catch (err) {
+      console.error('Applying to the selection failed:', err);
+      setEngineStatus({ phase: 'error', message: describeRunError(err) });
+    } finally {
+      paintingRef.current = false;
+      setIsPainting(false);
+    }
+  }, [processBrushPatch]);
+
+  const handleToolStart = useCallback(
+    (x: number, y: number) => {
+      const active = toolRef.current;
+      if (active === 'paint') {
+        handleBrushStart(x, y);
+        return;
+      }
+
+      void (async () => {
+        const selection = await ensureSelection();
+        if (!selection) return;
+
+        if (active === 'wand' || active === 'bucket') {
+          const pixels = await readPixels();
+          if (!pixels) return;
+          const { tolerance, contiguous } = selectionSettingsRef.current;
+          selection.clear();
+          selection.wand(pixels, x, y, tolerance, contiguous);
+          touchSelection();
+          // The bucket is the wand plus the thing you were going to do next.
+          if (active === 'bucket') await applyToSelection();
+          return;
+        }
+
+        if (active === 'lasso') {
+          lassoPointsRef.current = [{ x, y }];
+          return;
+        }
+
+        if (active === 'select-brush') {
+          selection.stamp(x, y, selectionSettingsRef.current.brushRadius, false);
+          touchSelection();
+        }
+      })();
+    },
+    [applyToSelection, ensureSelection, handleBrushStart, readPixels, touchSelection],
+  );
+
+  const handleToolMove = useCallback(
+    (x: number, y: number) => {
+      const active = toolRef.current;
+      if (active === 'paint') {
+        handleBrushMove(x, y);
+        return;
+      }
+
+      if (active === 'lasso' && lassoPointsRef.current.length > 0) {
+        const points = lassoPointsRef.current;
+        const last = points[points.length - 1];
+        // Thin the path: a point per pixel of mouse movement is thousands of segments to rasterize, and
+        // two pixels of resolution is far below what the outline shows.
+        if (Math.hypot(x - last.x, y - last.y) >= 2) {
+          points.push({ x, y });
+          touchSelection();
+        }
+        return;
+      }
+
+      if (active === 'select-brush' && selectionRef.current) {
+        selectionRef.current.stamp(x, y, selectionSettingsRef.current.brushRadius, false);
+        touchSelection();
+      }
+    },
+    [handleBrushMove, touchSelection],
+  );
+
+  const handleToolEnd = useCallback(() => {
+    const active = toolRef.current;
+    if (active === 'paint') {
+      handleBrushEnd();
+      return;
+    }
+
+    if (active === 'lasso') {
+      const points = lassoPointsRef.current;
+      lassoPointsRef.current = [];
+      // Releasing closes the outline back to where it started, which is what makes it a region.
+      if (points.length >= 3 && selectionRef.current) {
+        selectionRef.current.fillPolygon(points);
+      }
+      touchSelection();
+    }
+  }, [handleBrushEnd, touchSelection]);
+
+  const clearSelection = useCallback(() => {
+    selectionRef.current?.clear();
+    touchSelection();
+  }, [touchSelection]);
+
+  const invertSelection = useCallback(() => {
+    void (async () => {
+      const selection = await ensureSelection();
+      if (!selection) return;
+      selection.invert();
+      touchSelection();
+    })();
+  }, [ensureSelection, touchSelection]);
 
   const canGenerate =
     engineStatus.phase !== 'loading-model' &&
@@ -674,14 +867,36 @@ function App() {
 
   const isRunning = engineStatus.phase === 'running';
   isRunningRef.current = isRunning;
+
+  // Recomputed when the mask changes, so the panel can say how much is selected and enable Apply.
+  const selectedFraction = useMemo(() => {
+    void selectionVersion;
+    const selection = selectionRef.current;
+    if (!selection) return 0;
+    let total = 0;
+    for (const weight of selection.data) total += weight;
+    return total / (selection.width * selection.height);
+  }, [selectionVersion]);
+
+  const activeTool: CanvasTool = useMemo(
+    () => ({
+      cursorRadius:
+        tool === 'paint' ? brushSettings.radius : tool === 'select-brush' ? selectionSettings.brushRadius : undefined,
+      onStart: handleToolStart,
+      onMove: handleToolMove,
+      onEnd: handleToolEnd,
+    }),
+    [tool, brushSettings.radius, selectionSettings.brushRadius, handleToolStart, handleToolMove, handleToolEnd],
+  );
   const recordingSupported = isMovieRecordingSupported();
 
   // The brush needs a still photo to paint on and a network to paint with; style transfer also needs its
   // template, loaded here so the first dab of a stroke isn't the one that pays for it.
-  const canBrush = !!baseFile && !isBaseVideo && !!featureModel && !isRunning;
+  const toolsAvailable = !!baseFile && !isBaseVideo && !!featureModel && !isRunning;
+  const canBrush = toolsAvailable && tool !== 'none';
 
   useEffect(() => {
-    if (!brushEnabled || mode !== 'style' || !templateFile) return;
+    if (tool === 'none' || mode !== 'style' || !templateFile) return;
 
     let cancelled = false;
     (async () => {
@@ -698,14 +913,65 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [brushEnabled, mode, templateFile]);
+  }, [tool, mode, templateFile]);
 
   // Switching the brush on shows the canvas instead of the still image, so the image has to be on the
   // canvas by then — otherwise the viewport goes blank until the first dab lands.
   useEffect(() => {
-    if (!brushEnabled || !canBrush) return;
+    if (!canBrush) return;
     void ensureBrush();
-  }, [brushEnabled, canBrush, ensureBrush]);
+  }, [canBrush, ensureBrush]);
+
+  /**
+   * Draws the selection over the image: a wash across what is selected, plus the outline of a lasso still
+   * being drawn. The wash uses the feathered mask, so the softness of the edge is visible before it is
+   * committed to rather than being a number that has to be imagined.
+   */
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    const canvas = canvasRef.current;
+    if (!overlay || !canvas) return;
+
+    const selection = selectionRef.current;
+    const width = selection?.width ?? canvas.width;
+    const height = selection?.height ?? canvas.height;
+    if (overlay.width !== width || overlay.height !== height) {
+      overlay.width = width;
+      overlay.height = height;
+    }
+
+    const context = overlay.getContext('2d');
+    if (!context) return;
+    context.clearRect(0, 0, width, height);
+
+    if (tool === 'none') return;
+
+    if (selection && !selection.isEmpty()) {
+      const weights = selection.feathered(selectionSettings.feather);
+      const image = context.createImageData(width, height);
+      for (let i = 0; i < weights.length; i++) {
+        const weight = weights[i];
+        if (weight <= 0.002) continue;
+        image.data[i * 4] = 110;
+        image.data[i * 4 + 1] = 130;
+        image.data[i * 4 + 2] = 255;
+        image.data[i * 4 + 3] = Math.round(weight * 90);
+      }
+      context.putImageData(image, 0, 0);
+    }
+
+    const points = lassoPointsRef.current;
+    if (points.length > 1) {
+      context.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+      context.lineWidth = Math.max(1, width / 400);
+      context.setLineDash([6, 4]);
+      context.beginPath();
+      context.moveTo(points[0].x, points[0].y);
+      for (const point of points.slice(1)) context.lineTo(point.x, point.y);
+      context.closePath();
+      context.stroke();
+    }
+  }, [selectionVersion, selectionSettings.feather, tool]);
 
   // Painting owns tensors that outlive any one render, so they have to be released when the app is.
   useEffect(() => discardBrush, [discardBrush]);
@@ -724,16 +990,8 @@ function App() {
           status={engineStatus}
           resultImageUrl={resultImageUrl}
           basePreviewUrl={isBaseVideo ? undefined : basePreviewUrl}
-          brush={
-            brushEnabled && canBrush
-              ? {
-                  radius: brushSettings.radius,
-                  onStart: handleBrushStart,
-                  onMove: handleBrushMove,
-                  onEnd: handleBrushEnd,
-                }
-              : undefined
-          }
+          overlayRef={overlayRef}
+          tool={canBrush ? activeTool : undefined}
         />
       }
       controls={
@@ -819,15 +1077,26 @@ function App() {
             />
           </ControlGroup>
 
-          <ControlGroup title="Brush" defaultOpen={false}>
+          <ControlGroup title="Tools" defaultOpen={false}>
             <BrushPanel
-              enabled={brushEnabled}
-              onEnabledChange={setBrushEnabled}
+              tool={tool}
+              onToolChange={setTool}
               settings={brushSettings}
               onSettingsChange={setBrushSettings}
-              available={canBrush}
+              available={toolsAvailable}
               isPainting={isPainting}
               isRunning={isRunning}
+            />
+            <SelectionPanel
+              tool={tool}
+              settings={selectionSettings}
+              onSettingsChange={setSelectionSettings}
+              selectedFraction={selectedFraction}
+              isBusy={isPainting}
+              isRunning={isRunning}
+              onApply={() => void applyToSelection()}
+              onInvert={invertSelection}
+              onClear={clearSelection}
             />
           </ControlGroup>
 

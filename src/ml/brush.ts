@@ -106,23 +106,21 @@ export class DreamBrush {
   }
 
   /**
-   * Runs one dab: crop the patch, hand it to `process`, and blend what comes back through the mask.
+   * Processes one box of the image and blends the result back through `mask`.
    *
    * `process` is given the patch and returns a processed copy of it — whatever the current mode does to an
-   * image. Keeping that a callback is what lets the brush stay ignorant of DeepDream and style transfer
-   * both, and pick up their settings for free.
+   * image. Keeping that a callback is what lets this stay ignorant of DeepDream and style transfer both,
+   * and pick up their settings for free. The mask is [h, w, 1] over the same box, so a dab's round falloff
+   * and a selection's feathered outline are the same operation with different masks.
+   *
+   * The mask is borrowed, not owned: the caller disposes it.
    */
-  async dab(
-    centerX: number,
-    centerY: number,
-    settings: BrushSettings,
+  async applyPatch(
+    patch: PatchBounds,
+    mask: tf.Tensor3D,
     process: (patch: tf.Tensor3D) => Promise<tf.Tensor3D>,
-  ): Promise<boolean> {
+  ): Promise<void> {
     const [height, width] = this.shape;
-    const patch = patchAround(centerX, centerY, settings.radius, height, width);
-    if (!patch) {
-      return false;
-    }
 
     const cropped = tf.tidy(
       () => tf.keep(this.image.slice([patch.y, patch.x, 0], [patch.height, patch.width, 3])) as tf.Tensor3D,
@@ -134,8 +132,6 @@ export class DreamBrush {
     } finally {
       cropped.dispose();
     }
-
-    const mask = this.maskFor(patch, centerX, centerY, settings);
 
     const blended = tf.tidy(() => {
       const existing = this.image.slice([patch.y, patch.x, 0], [patch.height, patch.width, 3]) as tf.Tensor3D;
@@ -167,6 +163,51 @@ export class DreamBrush {
     processed.dispose();
     this.image.dispose();
     this.image = blended;
+  }
+
+  /**
+   * One dab of the brush at a point. Returns false when the dab falls entirely off the image, which
+   * happens whenever a stroke is dragged past the edge.
+   *
+   * `restrictTo`, when given, is the selection over the whole image: the dab is multiplied by it so a
+   * selection confines the brush the way it confines everything else, rather than the brush being a way
+   * around it.
+   */
+  async dab(
+    centerX: number,
+    centerY: number,
+    settings: BrushSettings,
+    process: (patch: tf.Tensor3D) => Promise<tf.Tensor3D>,
+    restrictTo?: Float32Array,
+  ): Promise<boolean> {
+    const [height, width] = this.shape;
+    const patch = patchAround(centerX, centerY, settings.radius, height, width);
+    if (!patch) {
+      return false;
+    }
+
+    const falloff = this.maskFor(patch, centerX, centerY, settings);
+
+    let mask = falloff;
+    let ownsMask = false;
+    if (restrictTo) {
+      const crop = new Float32Array(patch.width * patch.height);
+      for (let y = 0; y < patch.height; y++) {
+        const from = (patch.y + y) * width + patch.x;
+        crop.set(restrictTo.subarray(from, from + patch.width), y * patch.width);
+      }
+      mask = tf.tidy(() => {
+        const limit = tf.tensor3d(crop, [patch.height, patch.width, 1]);
+        return tf.keep(falloff.mul(limit)) as tf.Tensor3D;
+      });
+      ownsMask = true;
+    }
+
+    try {
+      await this.applyPatch(patch, mask, process);
+    } finally {
+      if (ownsMask) mask.dispose();
+    }
     return true;
   }
 

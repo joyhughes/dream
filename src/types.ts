@@ -89,6 +89,21 @@ export interface BrushSettings {
   stepsPerDab: number;
 }
 
+/** Which tool the pointer drives on the image. `none` leaves the canvas inert. */
+export type ToolId = 'none' | 'paint' | 'wand' | 'bucket' | 'lasso' | 'select-brush';
+
+/** Settings shared by the selection tools. Sizes are in working-image pixels. */
+export interface SelectionSettings {
+  /** How different a pixel may be from the one clicked and still be taken. 0 is an exact color match. */
+  tolerance: number;
+  /** Whether the wand only takes pixels connected to the one clicked, or every match in the image. */
+  contiguous: boolean;
+  /** How far the selection's edge fades, in pixels either side of it. 0 is a hard edge. */
+  feather: number;
+  /** Radius of the selection brush. */
+  brushRadius: number;
+}
+
 export interface ProgressUpdate {
   step: number;
   totalSteps: number;

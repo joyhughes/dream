@@ -225,9 +225,35 @@ body {
   line-height: 1.2;
 }
 
-.result-stage--painting {
-  cursor: none;
+.result-stage--tool {
   touch-action: none;
+}
+
+/* Only the radius tools replace the pointer; the wand and lasso need to see exactly where they will act. */
+.result-stage--radius-cursor {
+  cursor: none;
+}
+
+.result-stage--tool:not(.result-stage--radius-cursor) {
+  cursor: crosshair;
+}
+
+/* Sits exactly on the image below it and never intercepts the pointer meant for the canvas. */
+.selection-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.selection-panel {
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.selection-panel .btn {
+  font-size: 0.85em;
+  padding: 0.45em 0.9em;
 }
 
 /* Follows the pointer at the brush's real size, so what will be painted is visible before committing. */
