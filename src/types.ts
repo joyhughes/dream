@@ -46,6 +46,8 @@ export interface DreamParams {
   colorPreservation: number;
   /** Holds the image's average saturation at the source's, so it cannot drift over a run. */
   normalizeSaturation: boolean;
+  /** Holds the image's average brightness at the source's, so it cannot drift over a run. */
+  normalizeBrightness: boolean;
   /**
    * How large the drawn patterns come out, as a multiplier. 1 is the finest the network can draw; higher
    * values give bigger, coarser motifs. Independent of `octaves`, which spreads detail across many scales
@@ -70,6 +72,8 @@ export interface StyleParams {
   colorPreservation: number;
   /** Holds the image's average saturation at the source's, so it cannot drift over a run. */
   normalizeSaturation: boolean;
+  /** Holds the image's average brightness at the source's, so it cannot drift over a run. */
+  normalizeBrightness: boolean;
   /**
    * How large the drawn patterns come out, as a multiplier. 1 is the finest the network can draw; higher
    * values give bigger, coarser motifs. Independent of `octaves`, which spreads detail across many scales

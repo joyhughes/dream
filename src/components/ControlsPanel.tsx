@@ -314,39 +314,39 @@ export function BrushPanel({
       )}
       {tool === 'paint' && (
         <>
-      <Slider
-        label="Brush size"
-        value={settings.radius}
-        min={8}
-        max={400}
-        step={4}
-        disabled={isRunning}
-        tooltip="Radius of the dab, in pixels of the image being worked on. Bigger dabs cover ground faster but take proportionally longer to compute, so a very large brush stops feeling responsive — the whole point of a small one is that it can finish inside a frame."
-        onChange={(v) => set({ radius: v })}
-      />
-      <Slider
-        label="Feathering"
-        value={settings.feather}
-        min={0}
-        max={1}
-        step={0.05}
-        disabled={isRunning}
-        tooltip="How much of the radius is spent fading out. 0 gives a hard edge that shows the outline of every dab; 1 fades from the center out, so the effect only ever tints and blends invisibly into the image behind. Around 0.5 keeps a definite mark while hiding the seam."
-        onChange={(v) => set({ feather: v })}
-      />
-      <Slider
-        label="Steps per dab"
-        value={settings.stepsPerDab}
-        min={1}
-        max={20}
-        step={1}
-        disabled={isRunning}
-        tooltip="How many iterations run each time the brush is applied. More builds the effect up faster while you hold, but each dab takes longer, so the brush responds more coarsely to being moved. Low values give fine control over how far it goes; high values are quicker to reach a strong effect."
-        onChange={(v) => set({ stepsPerDab: v })}
-      />
-      <p className="field-hint">
-        {isPainting ? 'Painting…' : 'Hold in place to keep iterating; release to stop. Download saves the painted image.'}
-      </p>
+          <Slider
+            label="Brush size"
+            value={settings.radius}
+            min={8}
+            max={400}
+            step={4}
+            disabled={isRunning}
+            tooltip="Radius of the dab, in pixels of the image being worked on. Bigger dabs cover ground faster but take proportionally longer to compute, so a very large brush stops feeling responsive — the whole point of a small one is that it can finish inside a frame."
+            onChange={(v) => set({ radius: v })}
+          />
+          <Slider
+            label="Feathering"
+            value={settings.feather}
+            min={0}
+            max={1}
+            step={0.05}
+            disabled={isRunning}
+            tooltip="How much of the radius is spent fading out. 0 gives a hard edge that shows the outline of every dab; 1 fades from the center out, so the effect only ever tints and blends invisibly into the image behind. Around 0.5 keeps a definite mark while hiding the seam."
+            onChange={(v) => set({ feather: v })}
+          />
+          <Slider
+            label="Steps per dab"
+            value={settings.stepsPerDab}
+            min={1}
+            max={20}
+            step={1}
+            disabled={isRunning}
+            tooltip="How many iterations run each time the brush is applied. More builds the effect up faster while you hold, but each dab takes longer, so the brush responds more coarsely to being moved. Low values give fine control over how far it goes; high values are quicker to reach a strong effect."
+            onChange={(v) => set({ stepsPerDab: v })}
+          />
+          <p className="field-hint">
+            {isPainting ? 'Painting…' : 'Hold in place to keep iterating; release to stop. Download saves the painted image.'}
+          </p>
         </>
       )}
     </div>
@@ -683,12 +683,21 @@ export function RegularizerPanel({
   };
 
   const normalizesSaturation = isDream ? dreamParams.normalizeSaturation : styleParams.normalizeSaturation;
+  const normalizesBrightness = isDream ? dreamParams.normalizeBrightness : styleParams.normalizeBrightness;
 
   const setNormalizeSaturation = (next: boolean) => {
     if (isDream) {
       onDreamParamsChange({ ...dreamParams, normalizeSaturation: next });
     } else {
       onStyleParamsChange({ ...styleParams, normalizeSaturation: next });
+    }
+  };
+
+  const setNormalizeBrightness = (next: boolean) => {
+    if (isDream) {
+      onDreamParamsChange({ ...dreamParams, normalizeBrightness: next });
+    } else {
+      onStyleParamsChange({ ...styleParams, normalizeBrightness: next });
     }
   };
 
@@ -732,6 +741,13 @@ export function RegularizerPanel({
         disabled={isRunning}
         tooltip="Rescales saturation after every step so the image's average matches the one it started with. Unlike Color preservation, which pins each pixel's color where it was, this fixes only the average — the run stays free to make one area more vivid and another less, and only the drift of the whole image is taken away. That drift is what shows up as washing out over a long run, and as saturation wandering between the frames of a video, where every frame is a separate run that would otherwise land somewhere slightly different."
         onChange={setNormalizeSaturation}
+      />
+      <Toggle
+        label="Hold average brightness"
+        checked={normalizesBrightness}
+        disabled={isRunning}
+        tooltip="Rescales brightness after every step so the image's average matches the one it started with. Maximizing activations likes brightness and climbs toward it given the chance, so a long run drifts lighter and a video's frames drift apart. Independent of the saturation switch: this scales all three channels together, which leaves hue and saturation exactly as they were, so both can be on at once without fighting."
+        onChange={setNormalizeBrightness}
       />
       {mode === 'style' && (
         <Slider

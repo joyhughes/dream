@@ -7,7 +7,9 @@ import {
   clampToColorSpace,
   fromRgb,
   hsvToRgb,
+  meanBrightness,
   meanSaturation,
+  normalizeBrightness,
   normalizeSaturation,
   preserveColor,
   resizeInRgb,
@@ -284,6 +286,9 @@ export async function runStyleTransfer(
   const targetSaturation = params.normalizeSaturation
     ? (tf.tidy(() => tf.keep(meanSaturation(contentImage, 'rgb'))) as tf.Scalar)
     : null;
+  const targetBrightness = params.normalizeBrightness
+    ? (tf.tidy(() => tf.keep(meanBrightness(contentImage, 'rgb'))) as tf.Scalar)
+    : null;
 
   try {
     octaveLoop: for (let octave = 0; octave < shapes.length; octave++) {
@@ -372,6 +377,15 @@ export async function runStyleTransfer(
           normalized.dispose();
         }
 
+        // Orthogonal to the saturation pass above, so the order only matters where clipping bites.
+        if (targetBrightness) {
+          const normalized = tf.tidy(() =>
+            tf.keep(normalizeBrightness(generated as unknown as tf.Tensor3D, targetBrightness, params.colorSpace)),
+          );
+          generated.assign(normalized);
+          normalized.dispose();
+        }
+
         if (onProgress && (step % 5 === 0 || step === params.stepsPerOctave - 1)) {
           // Converted for display: `generated` holds the working color space, and painting HSV channels
           // as if they were RGB shows colors that are nowhere in the image.
@@ -396,6 +410,7 @@ export async function runStyleTransfer(
     generated.dispose();
     contentImageAtOctave.dispose();
     targetSaturation?.dispose();
+    targetBrightness?.dispose();
     contentTargets.forEach((target) => target.dispose());
     styleGramTargets.forEach((g) => g.dispose());
     optimizer.dispose();

@@ -12,7 +12,9 @@ import {
   clampToColorSpace,
   fromRgb,
   hsvToRgb,
+  meanBrightness,
   meanSaturation,
+  normalizeBrightness,
   normalizeSaturation,
   preserveColor,
   resizeInRgb,
@@ -94,6 +96,9 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
   const targetSaturation = params.normalizeSaturation
     ? (tf.tidy(() => tf.keep(meanSaturation(baseImage, 'rgb'))) as tf.Scalar)
     : null;
+  const targetBrightness = params.normalizeBrightness
+    ? (tf.tidy(() => tf.keep(meanBrightness(baseImage, 'rgb'))) as tf.Scalar)
+    : null;
 
   // Callers always get RGB back, whatever space the run worked in — including on an abort, which can
   // land anywhere in the loop below.
@@ -108,6 +113,7 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
     current.dispose();
     reference?.dispose();
     targetSaturation?.dispose();
+    targetBrightness?.dispose();
     return rgb;
   };
 
@@ -189,6 +195,17 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
       if (targetSaturation) {
         const normalized = tf.tidy(
           () => tf.keep(normalizeSaturation(current, targetSaturation, colorSpace)) as tf.Tensor3D,
+        );
+        current.dispose();
+        current = normalized;
+      }
+
+      // After saturation: the two are orthogonal — one holds value fixed, the other holds hue and
+      // saturation fixed — so neither undoes the other, and this one ends up with the last word on
+      // brightness where clipping makes them disagree at all.
+      if (targetBrightness) {
+        const normalized = tf.tidy(
+          () => tf.keep(normalizeBrightness(current, targetBrightness, colorSpace)) as tf.Tensor3D,
         );
         current.dispose();
         current = normalized;

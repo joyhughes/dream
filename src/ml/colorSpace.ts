@@ -158,6 +158,47 @@ export function normalizeSaturation(image: tf.Tensor3D, targetMean: tf.Scalar, s
 }
 
 /**
+ * The image's average brightness — the value channel, the largest of a pixel's three — as a scalar left on
+ * the GPU, for the same reason `meanSaturation` is: a per-step readback would stall the pipeline.
+ */
+export function meanBrightness(image: tf.Tensor3D, space: ColorSpace): tf.Scalar {
+  return tf.tidy(() => {
+    if (space === 'hsv') {
+      const [, , value] = splitChannels(image);
+      return value.mean() as tf.Scalar;
+    }
+    return image.max(2).mean() as tf.Scalar;
+  });
+}
+
+/**
+ * Rescales brightness so the image's average matches `targetMean`, leaving hue and saturation alone.
+ *
+ * In RGB this is a plain multiply of all three channels. Scaling them together moves the value while
+ * leaving hue untouched — the channels keep their ratios — and saturation too, since (max − min) / max is
+ * unchanged by a common factor. That makes this exactly orthogonal to `normalizeSaturation`, which holds
+ * value fixed in the same way, so both switches can be on without fighting each other.
+ *
+ * The counterpart to holding saturation: maximizing activations likes brightness and will climb toward it
+ * given the chance, and a long run or a video's worth of separate runs drift upward as a result.
+ */
+export function normalizeBrightness(image: tf.Tensor3D, targetMean: tf.Scalar, space: ColorSpace): tf.Tensor3D {
+  return tf.tidy(() => {
+    const current = meanBrightness(image, space);
+
+    // An all-black image has no brightness to rescale, and dividing by its zero would blow it out to white.
+    const scale = tf.where(current.greater(EPSILON), targetMean.div(current.add(EPSILON)), tf.onesLike(current));
+
+    if (space === 'hsv') {
+      const [hue, saturation, value] = splitChannels(image);
+      return tf.concat([hue, saturation, tf.clipByValue(value.mul(scale), 0, 1)], 2) as tf.Tensor3D;
+    }
+
+    return tf.clipByValue(image.mul(scale), 0, 1) as tf.Tensor3D;
+  });
+}
+
+/**
  * Pulls an image's hue and saturation back toward a reference, leaving its brightness alone.
  *
  * Gradient ascent has no reason to respect the colors it started with, and in HSV it actively spends them:

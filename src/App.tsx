@@ -101,6 +101,7 @@ const DEFAULT_DREAM_PARAMS: DreamParams = {
   colorSpace: 'rgb',
   colorPreservation: 0,
   normalizeSaturation: false,
+  normalizeBrightness: false,
   patternScale: 1,
   regularizers: NO_REGULARIZERS,
 };
@@ -117,6 +118,7 @@ const DEFAULT_STYLE_PARAMS: StyleParams = {
   colorSpace: 'rgb',
   colorPreservation: 0,
   normalizeSaturation: false,
+  normalizeBrightness: false,
   patternScale: 1,
   regularizers: NO_REGULARIZERS,
 };
