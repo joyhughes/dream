@@ -42,6 +42,8 @@ export interface DreamParams {
   lapLevels: number;
   /** The space the optimization steps in. See `ml/colorSpace`. */
   colorSpace: ColorSpace;
+  /** How strongly the original hue and saturation are restored after each step. 0 disables it. */
+  colorPreservation: number;
   regularizers: ImageRegularizers;
 }
 
@@ -56,6 +58,8 @@ export interface StyleParams {
   tileSize: number;
   /** The space the optimization steps in. See `ml/colorSpace`. */
   colorSpace: ColorSpace;
+  /** How strongly the content image's hue and saturation are restored after each step. 0 disables it. */
+  colorPreservation: number;
   regularizers: ImageRegularizers;
 }
 

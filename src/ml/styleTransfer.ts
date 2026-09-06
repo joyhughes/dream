@@ -3,7 +3,7 @@ import type { DiscoveredLayer, FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
 import { computeTiledGradient, computeTileGrid, effectiveTileSize, type TileSpec } from './tiledGradient';
 import { applyImageRegularizers, hasActiveImageRegularizer } from './regularizers';
-import { clampToColorSpace, fromRgb, hsvToRgb, resizeInRgb, toRgb, withRgbView } from './colorSpace';
+import { clampToColorSpace, fromRgb, hsvToRgb, preserveColor, resizeInRgb, toRgb, withRgbView } from './colorSpace';
 import type { PauseController } from './pauseController';
 import type { StyleParams } from '../types';
 
@@ -324,6 +324,22 @@ export async function runStyleTransfer(
           });
           generated.assign(regularized);
           regularized.dispose();
+        }
+
+        // The content image at this octave is already the reference we want, and already RGB.
+        if (params.colorPreservation > 0) {
+          const preserved = tf.tidy(() =>
+            tf.keep(
+              preserveColor(
+                generated as unknown as tf.Tensor3D,
+                contentImageAtOctave,
+                params.colorPreservation,
+                params.colorSpace,
+              ),
+            ),
+          );
+          generated.assign(preserved);
+          preserved.dispose();
         }
 
         if (onProgress && (step % 5 === 0 || step === params.stepsPerOctave - 1)) {

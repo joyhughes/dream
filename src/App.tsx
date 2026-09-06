@@ -78,6 +78,7 @@ const DEFAULT_DREAM_PARAMS: DreamParams = {
   tvWeight: 0,
   lapLevels: 1,
   colorSpace: 'rgb',
+  colorPreservation: 0,
   regularizers: NO_REGULARIZERS,
 };
 
@@ -91,6 +92,7 @@ const DEFAULT_STYLE_PARAMS: StyleParams = {
   stepsPerOctave: 40,
   tileSize: DEFAULT_TILE_SIZE,
   colorSpace: 'rgb',
+  colorPreservation: 0,
   regularizers: NO_REGULARIZERS,
 };
 

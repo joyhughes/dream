@@ -8,7 +8,7 @@ import {
   laplacianNormalize,
   totalVariationGradient,
 } from './regularizers';
-import { clampToColorSpace, fromRgb, hsvToRgb, resizeInRgb, toRgb, withRgbView } from './colorSpace';
+import { clampToColorSpace, fromRgb, hsvToRgb, preserveColor, resizeInRgb, toRgb, withRgbView } from './colorSpace';
 import type { PauseController } from './pauseController';
 import type { ColorSpace, DreamParams, DreamPreset } from '../types';
 
@@ -66,11 +66,16 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
     return tf.keep(fromRgb(resized, colorSpace)) as tf.Tensor3D;
   });
 
+  // The starting image at the current octave's size, kept only when color preservation needs something to
+  // restore toward.
+  let reference: tf.Tensor3D | null = null;
+
   // Callers always get RGB back, whatever space the run worked in — including on an abort, which can
   // land anywhere in the loop below.
   const finish = (): tf.Tensor3D => {
     const rgb = toRgb(current, colorSpace);
     current.dispose();
+    reference?.dispose();
     return rgb;
   };
 
@@ -82,6 +87,13 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
     );
     current.dispose();
     current = upscaled;
+
+    if (params.colorPreservation > 0) {
+      reference?.dispose();
+      reference = tf.tidy(
+        () => tf.keep(tf.image.resizeBilinear(baseImage, [targetH, targetW])) as tf.Tensor3D,
+      );
+    }
 
     for (let step = 0; step < params.stepsPerOctave; step++) {
       if (signal?.aborted) {
@@ -130,6 +142,15 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
         });
         current.dispose();
         current = regularized;
+      }
+
+      // Applied last, so it constrains whatever the step and the regularizers between them produced.
+      if (reference) {
+        const preserved = tf.tidy(
+          () => tf.keep(preserveColor(current, reference!, params.colorPreservation, colorSpace)) as tf.Tensor3D,
+        );
+        current.dispose();
+        current = preserved;
       }
 
       if (onProgress && (step % previewEvery === 0 || step === params.stepsPerOctave - 1)) {

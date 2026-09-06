@@ -107,6 +107,47 @@ export function clampToColorSpace(image: tf.Tensor3D, space: ColorSpace): tf.Ten
 }
 
 /**
+ * Pulls an image's hue and saturation back toward a reference, leaving its brightness alone.
+ *
+ * Gradient ascent has no reason to respect the colors it started with, and in HSV it actively spends them:
+ * raising value and lowering saturation both brighten a pixel, so a loss that likes brightness — which
+ * activation-maximizing does — takes whichever is cheaper, and saturation drains away. This constrains the
+ * result instead of hoping the parameterization will, and works in either working space, so a run can keep
+ * its colors without giving up RGB's dynamics.
+ *
+ * `amount` of 0 leaves the image alone; 1 restores the reference's color exactly, so only brightness — the
+ * structure the ascent is drawing — survives from the run.
+ *
+ * Hue is interpolated the short way around the wheel. A plain blend between 0.99 and 0.01 would travel
+ * through the entire spectrum to cross a boundary the eye sees as no distance at all.
+ */
+export function preserveColor(
+  image: tf.Tensor3D,
+  referenceRgb: tf.Tensor3D,
+  amount: number,
+  space: ColorSpace,
+): tf.Tensor3D {
+  return tf.tidy(() => {
+    const hsv = space === 'hsv' ? image : rgbToHsv(image);
+    const referenceHsv = rgbToHsv(referenceRgb);
+
+    const [hue, saturation, value] = splitChannels(hsv);
+    const [referenceHue, referenceSaturation] = splitChannels(referenceHsv);
+
+    // Shortest signed distance around the wheel, in [-0.5, 0.5).
+    const offset = referenceHue.sub(hue).add(0.5) as tf.Tensor3D;
+    const shortestPath = offset.sub(offset.floor()).sub(0.5) as tf.Tensor3D;
+
+    const blendedHue = hue.add(shortestPath.mul(amount)) as tf.Tensor3D;
+    const wrappedHue = blendedHue.sub(blendedHue.floor()) as tf.Tensor3D;
+    const blendedSaturation = saturation.add(referenceSaturation.sub(saturation).mul(amount)) as tf.Tensor3D;
+
+    const result = tf.concat([wrappedHue, blendedSaturation, value], 2) as tf.Tensor3D;
+    return space === 'hsv' ? result : hsvToRgb(result);
+  });
+}
+
+/**
  * Runs `consume` with an RGB view of an image held in `space`, and cleans up after it.
  *
  * This is how the live preview, and everything downstream of the canvas it draws to — the movie recorder,

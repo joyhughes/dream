@@ -413,6 +413,16 @@ export function RegularizerPanel({
     }
   };
 
+  const colorPreservation = isDream ? dreamParams.colorPreservation : styleParams.colorPreservation;
+
+  const setColorPreservation = (next: number) => {
+    if (isDream) {
+      onDreamParamsChange({ ...dreamParams, colorPreservation: next });
+    } else {
+      onStyleParamsChange({ ...styleParams, colorPreservation: next });
+    }
+  };
+
   const setColorSpace = (next: ColorSpace) => {
     if (isDream) {
       onDreamParamsChange({ ...dreamParams, colorSpace: next });
@@ -425,7 +435,7 @@ export function RegularizerPanel({
     <div className="slider-panel">
       <label
         className="field-row"
-        title="Which coordinates the optimizer steps in. RGB moves the three color channels independently. HSV moves hue, saturation and value instead, so one step is a rotation around the color wheel, a change in vividness, and a change in brightness — the same size of step reaches very different images. Hue being an angle, it wraps rather than clipping, so color drifts around the wheel instead of piling up at the ends. The network is always shown RGB either way."
+        title="Which coordinates the optimizer steps in. RGB moves the three color channels independently. HSV moves hue, saturation and value instead, so one step is a rotation around the color wheel, a change in vividness, and a change in brightness — the same size of step reaches very different images. Note that HSV does not keep colors truer: raising value and lowering saturation both brighten a pixel, so an ascent that likes brightness drains saturation. Use Color preservation below for that. The network is always shown RGB either way."
       >
         <span>Color space</span>
         <select
@@ -437,6 +447,16 @@ export function RegularizerPanel({
           <option value="hsv">HSV (hue / saturation / value)</option>
         </select>
       </label>
+      <Slider
+        label="Color preservation"
+        value={colorPreservation}
+        min={0}
+        max={1}
+        step={0.05}
+        disabled={isRunning}
+        tooltip="Restores the original image's hue and saturation after every step, keeping only the brightness the run drew. Because it applies every step its effect compounds, so the useful range is the low end: 0.1 cuts color drift to about a fifth without touching how much structure appears, 0.2 to a twelfth, and 1 locks color to the original exactly so the effect shows up purely as light and shade. Works in either color space, so an RGB run can keep its colors too. Hue is blended the short way around the wheel, so reds either side of the wrap stay red."
+        onChange={setColorPreservation}
+      />
       {mode === 'style' && (
         <Slider
           label="Smoothing (TV weight)"
