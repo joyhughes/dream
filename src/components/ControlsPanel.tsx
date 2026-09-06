@@ -465,7 +465,7 @@ export function SelectionPanel({
         {isBusy
           ? 'Working…'
           : hasSelection
-            ? `${(selectedFraction * 100).toFixed(1)}% of the image selected. Paint and Apply both stay inside it. Hold shift to subtract.`
+            ? `${(selectedFraction * 100).toFixed(1)}% of the image selected. Generate, Paint and Apply all stay inside it. Hold shift to subtract.`
             : 'Nothing selected — tools act on the whole image. Hold shift with any selection tool to subtract.'}
       </p>
     </div>
@@ -885,7 +885,7 @@ export function ActionsBar({
             className="btn btn--primary"
             onClick={onGenerate}
             disabled={!canGenerate}
-            title="Runs DeepDream or Style Transfer on the uploaded image(s) using the current preset and slider settings."
+            title="Runs DeepDream or Style Transfer on the uploaded image(s) using the current preset and slider settings. With a selection active it runs inside the selection only, blended in through its feathered edge."
           >
             Generate
           </button>

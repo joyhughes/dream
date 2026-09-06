@@ -190,6 +190,8 @@ function App() {
   const isRunningRef = useRef(false);
 
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  // Scratch canvas the in-progress patch is rendered to before being drawn into the main one.
+  const patchPreviewRef = useRef<HTMLCanvasElement | null>(null);
   const selectionRef = useRef<SelectionMask | null>(null);
   const lassoPointsRef = useRef<Array<{ x: number; y: number }>>([]);
   // The lasso only acts when the stroke ends, so whether it adds or subtracts is decided when the stroke
@@ -669,7 +671,18 @@ function App() {
     // Runs the currently-selected algorithm (DeepDream or Style Transfer) on one image tensor,
     // reporting progress as a step count offset against totalSteps — shared by the single-image
     // path and the per-frame video-processing loop below.
-    const runOnce = async (inputTensor: tf.Tensor3D, stepOffset: number, totalSteps: number): Promise<tf.Tensor3D> => {
+    const drawFullPreview = async (image: tf.Tensor3D) => {
+      if (canvasRef.current) await renderTensorToCanvas(image, canvasRef.current);
+    };
+
+    const runOnce = async (
+      inputTensor: tf.Tensor3D,
+      stepOffset: number,
+      totalSteps: number,
+      // How an in-progress image reaches the screen. A whole-image run replaces the canvas; a run confined
+      // to a selection draws its patch back into place instead.
+      renderPreview: (image: tf.Tensor3D) => Promise<void> = drawFullPreview,
+    ): Promise<tf.Tensor3D> => {
       if (mode === 'deepdream') {
         const preset = presets.find((p) => p.id === selectedPresetId);
         if (!preset) throw new Error('No preset selected.');
@@ -682,7 +695,7 @@ function App() {
           pauseController,
           onProgress: async ({ octave, step, image }) => {
             setEngineStatus({ phase: 'running', step: stepOffset + octave * dreamParams.stepsPerOctave + step, totalSteps });
-            if (canvasRef.current) await renderTensorToCanvas(image, canvasRef.current);
+            await renderPreview(image);
             persistProgressSnapshot();
             await movieRecorder?.captureStep();
           },
@@ -696,7 +709,7 @@ function App() {
         pauseController,
         onProgress: async ({ octave, step, image }) => {
           setEngineStatus({ phase: 'running', step: stepOffset + octave * styleParams.stepsPerOctave + step, totalSteps });
-          if (canvasRef.current) await renderTensorToCanvas(image, canvasRef.current);
+          await renderPreview(image);
           persistProgressSnapshot();
           await movieRecorder?.captureStep();
         },
@@ -728,7 +741,71 @@ function App() {
         templateTensor = imageToWorkingTensor(templateImg, workingMax);
       }
 
-      if (isBaseVideo) {
+      const selection = selectionRef.current;
+      const bounds =
+        selection && !selection.isEmpty() && !isBaseVideo
+          ? selection.bounds(Math.ceil(selectionSettings.feather) + 1)
+          : null;
+
+      if (bounds && selection) {
+        // Generate stays inside the selection, running the full pipeline — every octave, every step — over
+        // its box rather than the cut-down pass the brush uses. The result is blended back through the same
+        // feathered edge, so what Generate leaves behind matches what the wash on screen promised.
+        const brush = await ensureBrush();
+        if (!brush) throw new Error('Nothing to work on.');
+
+        if (canvasRef.current) {
+          await renderTensorToCanvas(brush.current, canvasRef.current);
+        }
+
+        const mask = selection.toTensor(bounds, selectionSettings.feather);
+        const basePatch = tf.tidy(
+          () =>
+            tf.keep(
+              brush.current.slice([bounds.y, bounds.x, 0], [bounds.height, bounds.width, 3]),
+            ) as tf.Tensor3D,
+        );
+
+        // Previews are composited through the mask and drawn into place, so the run is watched where it is
+        // happening and the soft edge is visible throughout rather than appearing at the end.
+        const drawPatchPreview = async (image: tf.Tensor3D) => {
+          const canvas = canvasRef.current;
+          if (!canvas) return;
+
+          const blended = tf.tidy(
+            () => tf.keep(basePatch.add(image.sub(basePatch).mul(mask))) as tf.Tensor3D,
+          );
+          try {
+            const scratch = patchPreviewRef.current ?? (patchPreviewRef.current = document.createElement('canvas'));
+            await renderTensorToCanvas(blended, scratch);
+            canvas.getContext('2d')?.drawImage(scratch, bounds.x, bounds.y);
+          } finally {
+            blended.dispose();
+          }
+        };
+
+        try {
+          await brush.applyPatch({ y: bounds.y, x: bounds.x, height: bounds.height, width: bounds.width }, mask, (patch) =>
+            runOnce(patch, 0, stepsPerRun, drawPatchPreview),
+          );
+        } finally {
+          mask.dispose();
+          basePatch.dispose();
+        }
+
+        if (canvasRef.current) {
+          const canvas = canvasRef.current;
+          await renderTensorToCanvas(brush.current, canvas);
+          canvas.toBlob((blob) => {
+            if (!blob) return;
+            setResultBlob(blob);
+            void saveLastResultBlob(blob);
+          }, 'image/png');
+        }
+
+        setHasResult(true);
+        setEngineStatus({ phase: 'done' });
+      } else if (isBaseVideo) {
         videoSource = await VideoFrameSource.load(baseFile, videoFps);
 
         // Every processed frame is held as an ImageBitmap until the whole clip is encoded at the end,
@@ -802,10 +879,13 @@ function App() {
         // Nothing reads the finished tensor once it's on the canvas and encoded to a PNG — and it is a
         // full-resolution float32 buffer, so holding it kept a run's worth of GPU memory alive right
         // through the next run.
-        result.dispose();
-        // The brush repaints from the new result on its next stroke rather than from the stale image.
+        // Hand the finished image straight to the brush, rather than dropping it and letting it reload
+        // from the saved PNG. That reload raced the canvas's asynchronous encode: with a tool active the
+        // brush is re-primed the moment the run ends, which is before `toBlob` has produced anything, so
+        // it reloaded the *previous* image and painted it over the result that had just finished.
         brushRef.current?.dispose();
-        brushRef.current = null;
+        brushRef.current = new DreamBrush(result);
+        result.dispose();
         setHasResult(true);
         setEngineStatus({ phase: 'done' });
 
@@ -847,6 +927,8 @@ function App() {
     isBaseVideo,
     videoFps,
     persistProgressSnapshot,
+    ensureBrush,
+    selectionSettings.feather,
   ]);
 
   const handleCancel = useCallback(() => {
