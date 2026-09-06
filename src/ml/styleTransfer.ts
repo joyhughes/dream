@@ -1,7 +1,7 @@
 import { tf } from './tfSetup';
 import type { DiscoveredLayer, FeatureModel } from './featureModel';
 import { computeOctaveShapes } from './octaves';
-import { computeTiledGradient, computeTileGrid, effectiveTileSize, type TileSpec } from './tiledGradient';
+import { computeTiledGradient, computeTileGrid, effectiveTileSize, rollImage, type TileSpec } from './tiledGradient';
 import { applyImageRegularizers, hasActiveImageRegularizer } from './regularizers';
 import {
   clampToColorSpace,
@@ -70,31 +70,44 @@ function tileKey(spec: TileSpec): string {
 }
 
 /**
- * The content activation each tile is pulled toward. It depends only on the content image and the tile
- * grid, so within an octave it is the same on every step — computed once here rather than on every step,
- * and, more importantly, computed outside the gradient tape. Inside it, this is a second network pass
- * whose intermediates are all held for a backward pass that never needs them, which roughly doubles what
- * a tile pass costs; that is what put style transfer over an iPhone's memory ceiling while DeepDream,
- * which only ever runs one pass, stayed under it.
+ * The content activation each tile is pulled toward, for one step's jitter.
+ *
+ * The tiled gradient shifts the image before cutting tiles, so a tile at grid position (y, x) holds the
+ * content that was at (y − shiftY, x − shiftX). Cropping the reference at (y, x) instead compares each
+ * region of the result against a displaced piece of the photo, redrawn every step — the content term then
+ * pulls nowhere in particular and blurs out the structure it exists to hold. Rolling the content image by
+ * the same shift puts the two back in register.
+ *
+ * That makes this per-step work rather than per-octave, since the shift is new each step. It stays outside
+ * the gradient tape, which is the expensive place: inside, every intermediate of this pass would be held
+ * for a backward pass that never uses it.
  */
 function computeContentTargets(
   featureModel: FeatureModel,
   contentLayer: DiscoveredLayer,
   contentImageAtOctave: tf.Tensor3D,
   tileSize: number,
+  shiftY: number,
+  shiftX: number,
 ): Map<string, tf.Tensor> {
   const [h, w] = contentImageAtOctave.shape;
   const specs = computeTileGrid(h, w, effectiveTileSize(tileSize, h, w));
   const targets = new Map<string, tf.Tensor>();
 
-  for (const spec of specs) {
-    // A scope per tile, so only the one activation being kept outlives each pass.
-    tf.tidy(() => {
-      const crop = contentImageAtOctave.slice([spec.y, spec.x, 0], [spec.h, spec.w, 3]) as tf.Tensor3D;
-      const batched = featureModel.preprocess(crop);
-      const act = featureModel.activations(batched, [contentLayer.nodeName])[0];
-      targets.set(tileKey(spec), tf.keep(act));
-    });
+  const rolled = tf.tidy(() => tf.keep(rollImage(contentImageAtOctave, shiftY, shiftX)) as tf.Tensor3D);
+
+  try {
+    for (const spec of specs) {
+      // A scope per tile, so only the one activation being kept outlives each pass.
+      tf.tidy(() => {
+        const crop = rolled.slice([spec.y, spec.x, 0], [spec.h, spec.w, 3]) as tf.Tensor3D;
+        const batched = featureModel.preprocess(crop);
+        const act = featureModel.activations(batched, [contentLayer.nodeName])[0];
+        targets.set(tileKey(spec), tf.keep(act));
+      });
+    }
+  } finally {
+    rolled.dispose();
   }
 
   return targets;
@@ -110,7 +123,7 @@ function makeTiledStyleLoss(
   featureModel: FeatureModel,
   contentLayer: DiscoveredLayer,
   styleLayers: DiscoveredLayer[],
-  contentTargets: Map<string, tf.Tensor>,
+  readContentTargets: () => Map<string, tf.Tensor>,
   styleGramTargets: tf.Tensor2D[],
   params: StyleParams,
 ) {
@@ -126,7 +139,7 @@ function makeTiledStyleLoss(
     const batched = featureModel.preprocess(rgbTile);
     const acts = featureModel.activations(batched, requestNames);
 
-    const contentTarget = contentTargets.get(tileKey(spec));
+    const contentTarget = readContentTargets().get(tileKey(spec));
     if (!contentTarget) {
       // Both grids come from computeTileGrid on the same dimensions, so this can only mean they've
       // drifted apart in code — worth saying plainly rather than failing inside an arithmetic op.
@@ -211,12 +224,42 @@ async function optimizeStep(
   featureModel: FeatureModel,
   contentLayer: DiscoveredLayer,
   styleLayers: DiscoveredLayer[],
-  contentTargets: Map<string, tf.Tensor>,
+  contentImageAtOctave: tf.Tensor3D,
   styleGramTargets: tf.Tensor2D[],
   params: StyleParams,
 ): Promise<void> {
-  const lossFn = makeTiledStyleLoss(featureModel, contentLayer, styleLayers, contentTargets, styleGramTargets, params);
-  const gradient = await computeTiledGradient(generated as unknown as tf.Tensor3D, params.tileSize, lossFn);
+  // Rebuilt below, once the tiled gradient has chosen this step's jitter.
+  let contentTargets = new Map<string, tf.Tensor>();
+
+  const lossFn = makeTiledStyleLoss(
+    featureModel,
+    contentLayer,
+    styleLayers,
+    () => contentTargets,
+    styleGramTargets,
+    params,
+  );
+
+  let gradient: tf.Tensor3D;
+  try {
+    gradient = await computeTiledGradient(
+      generated as unknown as tf.Tensor3D,
+      params.tileSize,
+      lossFn,
+      (shiftY, shiftX) => {
+        contentTargets = computeContentTargets(
+          featureModel,
+          contentLayer,
+          contentImageAtOctave,
+          params.tileSize,
+          shiftY,
+          shiftX,
+        );
+      },
+    );
+  } finally {
+    contentTargets.forEach((target) => target.dispose());
+  }
 
   // Tiling means accumulating several separate tf.grad() calls into one gradient tensor, which
   // optimizer.minimize()'s built-in autodiff can't do — applyGradients() lets us hand it a precomputed one.
@@ -298,8 +341,6 @@ export async function runStyleTransfer(
   let contentImageAtOctave = tf.tidy(
     () => tf.keep(tf.image.resizeBilinear(contentImage, shapes[0])) as tf.Tensor3D,
   );
-  let contentTargets = computeContentTargets(featureModel, contentLayer, contentImageAtOctave, params.tileSize);
-
   // Measured from the content image, which is what the result is meant to still look like the color of.
   const targetSaturation = params.normalizeSaturation
     ? (tf.tidy(() => tf.keep(meanSaturation(contentImage, 'rgb'))) as tf.Scalar)
@@ -329,9 +370,6 @@ export async function runStyleTransfer(
           () => tf.keep(tf.image.resizeBilinear(contentImage, [targetH, targetW])) as tf.Tensor3D,
         );
 
-        // Tied to this octave's resolution and tile grid, so the previous octave's set is dead weight.
-        contentTargets.forEach((target) => target.dispose());
-        contentTargets = computeContentTargets(featureModel, contentLayer, contentImageAtOctave, params.tileSize);
       }
 
       for (let step = 0; step < params.stepsPerOctave; step++) {
@@ -351,7 +389,7 @@ export async function runStyleTransfer(
           featureModel,
           contentLayer,
           styleLayers,
-          contentTargets,
+          contentImageAtOctave,
           styleGramTargets,
           params,
         );
@@ -434,7 +472,6 @@ export async function runStyleTransfer(
     contentImageAtOctave.dispose();
     targetSaturation?.dispose();
     targetBrightness?.dispose();
-    contentTargets.forEach((target) => target.dispose());
     styleGramTargets.forEach((g) => g.dispose());
     optimizer.dispose();
   }

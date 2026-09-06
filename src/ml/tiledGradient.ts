@@ -82,11 +82,16 @@ export function computeTileGrid(height: number, width: number, tileSize: number)
  * otherwise the fixed tile boundaries show up as a visible grid pattern in the result.
  *
  * Yields to the event loop periodically since a large image can mean dozens of sequential tile passes.
+ *
+ * `prepare` is called with the jitter this pass chose, before any tile runs. A loss that compares each tile
+ * against a reference has to shift that reference by the same amount, and the jitter is chosen here — so it
+ * has to be handed out rather than kept private.
  */
 export async function computeTiledGradient(
   image: tf.Tensor3D,
   requestedTileSize: number,
   lossFn: (tile: tf.Tensor3D, tileSpec: TileSpec) => tf.Scalar,
+  prepare?: (shiftY: number, shiftX: number) => void,
 ): Promise<tf.Tensor3D> {
   const [h, w] = image.shape;
 
@@ -94,6 +99,8 @@ export async function computeTiledGradient(
 
   const shiftY = Math.floor(Math.random() * tileSize);
   const shiftX = Math.floor(Math.random() * tileSize);
+  prepare?.(shiftY, shiftX);
+
   const rolled = tf.tidy(() => tf.keep(rollImage(image, shiftY, shiftX)) as tf.Tensor3D);
 
   const tiles = computeTileGrid(h, w, tileSize);
