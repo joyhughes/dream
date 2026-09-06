@@ -241,6 +241,31 @@ body {
   pointer-events: none;
 }
 
+.found-parameters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.7rem;
+  border: 1px solid rgba(106, 109, 255, 0.35);
+  border-radius: 10px;
+  background: rgba(106, 109, 255, 0.08);
+}
+
+.found-parameters-title {
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.found-parameters-summary {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.found-parameters .btn {
+  font-size: 0.85em;
+  padding: 0.45em 0.9em;
+}
+
 .tool-row {
   display: flex;
   flex-wrap: wrap;

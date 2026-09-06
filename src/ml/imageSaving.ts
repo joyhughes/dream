@@ -53,7 +53,7 @@ export function downloadBlob(blob: Blob, filename: string) {
  * its callback runs the user activation `saveImage` needs is gone, so the share sheet never opens.
  * `toDataURL` is synchronous, which keeps the save in the same task as the click that asked for it.
  */
-export function canvasToPngBlob(canvas: HTMLCanvasElement): Blob {
+export function canvasToPngBytes(canvas: HTMLCanvasElement): Uint8Array {
   const dataUrl = canvas.toDataURL('image/png');
   const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
   const binary = atob(base64);
@@ -61,5 +61,9 @@ export function canvasToPngBlob(canvas: HTMLCanvasElement): Blob {
   for (let i = 0; i < binary.length; i += 1) {
     bytes[i] = binary.charCodeAt(i);
   }
-  return new Blob([bytes], { type: 'image/png' });
+  return bytes;
+}
+
+export function canvasToPngBlob(canvas: HTMLCanvasElement): Blob {
+  return new Blob([canvasToPngBytes(canvas)], { type: 'image/png' });
 }

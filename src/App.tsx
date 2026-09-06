@@ -10,6 +10,7 @@ import {
   RegularizerPanel,
   BrushPanel,
   SelectionPanel,
+  ParametersFromImage,
 } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
 import { HoverPopup } from './components/HoverPopup';
@@ -28,12 +29,19 @@ import {
   saveBaseImage,
   saveLastResultBlob,
 } from './ml/resultPersistence';
-import { canvasToPngBlob, downloadBlob, saveImage } from './ml/imageSaving';
+import { canvasToPngBytes, downloadBlob, saveImage } from './ml/imageSaving';
+import { isPng } from './ml/pngText';
 import { PauseController } from './ml/pauseController';
 import { MovieRecorder, isMovieRecordingSupported } from './ml/movieRecorder';
 import { encodeFrameSequence } from './ml/frameEncoding';
 import { VideoFrameSource } from './ml/videoFrames';
 import { DreamBrush } from './ml/brush';
+import {
+  couldCarryParameters,
+  embedParameters,
+  readEmbeddedParameters,
+  type SavedParameters,
+} from './ml/imageMetadata';
 import { SelectionMask } from './ml/selection';
 import { BUILT_IN_TEMPLATES } from './templates/builtInTemplates';
 import type { CanvasTool } from './components/ResultCanvas';
@@ -168,6 +176,9 @@ function App() {
   const [brushSettings, setBrushSettings] = useState<BrushSettings>(DEFAULT_BRUSH);
   const [selectionSettings, setSelectionSettings] = useState<SelectionSettings>(DEFAULT_SELECTION);
   const [isPainting, setIsPainting] = useState(false);
+  // Parameters found inside the picked image, waiting for the user to say whether to use them.
+  const [offeredParameters, setOfferedParameters] = useState<SavedParameters | null>(null);
+  const [parametersApplied, setParametersApplied] = useState(false);
   // Bumped whenever the mask changes, purely to drive a redraw of the overlay and the panel's summary —
   // the mask itself lives in a ref, since it is written pixel by pixel and must not clone on every stroke.
   const [selectionVersion, setSelectionVersion] = useState(0);
@@ -309,7 +320,37 @@ function App() {
     setEngineStatus((status) => (status.phase === 'done' ? { phase: 'idle' } : status));
     void clearLastResult();
     void saveBaseImage(file);
+
+    // An image saved from here carries the settings it was made with. Read them, but do not apply them —
+    // silently rewriting every slider because of what a file contained would be its own kind of surprise.
+    setOfferedParameters(null);
+    setParametersApplied(false);
+    if (couldCarryParameters(file)) {
+      void (async () => {
+        try {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          const found = readEmbeddedParameters(bytes, parametersRef.current);
+          if (found) setOfferedParameters(found);
+        } catch (err) {
+          console.warn('Could not read parameters from the image:', err);
+        }
+      })();
+    }
   }, []);
+
+  const applyOfferedParameters = useCallback(() => {
+    const found = offeredParameters;
+    if (!found) return;
+
+    setMode(found.mode);
+    setFeatureNetworkId(found.featureNetworkId);
+    setDreamParams(found.dream);
+    setStyleParams(found.style);
+    // Set last, and left as-is if the network's preset list turns out not to contain it: switching networks
+    // rebuilds that list asynchronously, and it drops an unknown id on its own.
+    setSelectedPresetId(found.presetId);
+    setParametersApplied(true);
+  }, [offeredParameters]);
 
   const handleTemplateFile = useCallback((file: File) => {
     brushTemplateRef.current?.dispose();
@@ -351,6 +392,42 @@ function App() {
   }, []);
 
   const isBaseVideo = !!baseFile && baseFile.type.startsWith('video/');
+
+  /** Everything worth carrying inside a saved picture. */
+  const currentParameters = useMemo<SavedParameters>(
+    () => ({
+      mode,
+      featureNetworkId,
+      presetId: selectedPresetId,
+      dream: dreamParams,
+      style: styleParams,
+    }),
+    [mode, featureNetworkId, selectedPresetId, dreamParams, styleParams],
+  );
+  const parametersRef = useRef(currentParameters);
+  parametersRef.current = currentParameters;
+
+  /**
+   * Writes the settings into a PNG. Synchronous on purpose: a save has to reach iOS's share sheet inside
+   * the click that asked for it, and awaiting anything spends the activation that allows it.
+   */
+  const stampParameters = useCallback((bytes: Uint8Array): Blob => {
+    const stamped = isPng(bytes) ? embedParameters(bytes, parametersRef.current) : bytes;
+    return new Blob([stamped], { type: 'image/png' });
+  }, []);
+
+  /** The same, for a blob whose bytes we do not already have. Used off the save path, where waiting is fine. */
+  const stampParametersAsync = useCallback(
+    async (blob: Blob): Promise<Blob> => {
+      try {
+        return stampParameters(new Uint8Array(await blob.arrayBuffer()));
+      } catch (err) {
+        console.warn('Could not write parameters into the image:', err);
+        return blob;
+      }
+    },
+    [stampParameters],
+  );
 
   /** Throws the painted image away, so the next stroke starts from whatever the app is showing now. */
   const discardBrush = useCallback(() => {
@@ -452,12 +529,14 @@ function App() {
     if (canvas) {
       canvas.toBlob((blob) => {
         if (!blob) return;
-        setResultBlob(blob);
-        setHasResult(true);
-        void saveLastResultBlob(blob);
+        void stampParametersAsync(blob).then((stamped) => {
+          setResultBlob(stamped);
+          setHasResult(true);
+          void saveLastResultBlob(stamped);
+        });
       }, 'image/png');
     }
-  }, [ensureBrush, processBrushPatch]);
+  }, [ensureBrush, processBrushPatch, stampParametersAsync]);
 
   const handleBrushStart = useCallback(
     (x: number, y: number) => {
@@ -529,9 +608,11 @@ function App() {
         await renderTensorToCanvas(brush.current, canvasRef.current);
         canvasRef.current.toBlob((blob) => {
           if (!blob) return;
-          setResultBlob(blob);
-          setHasResult(true);
-          void saveLastResultBlob(blob);
+          void stampParametersAsync(blob).then((stamped) => {
+            setResultBlob(stamped);
+            setHasResult(true);
+            void saveLastResultBlob(stamped);
+          });
         }, 'image/png');
       }
     } catch (err) {
@@ -541,7 +622,7 @@ function App() {
       paintingRef.current = false;
       setIsPainting(false);
     }
-  }, [processBrushPatch]);
+  }, [processBrushPatch, stampParametersAsync]);
 
   const handleToolStart = useCallback(
     (x: number, y: number, mode: SelectionMode) => {
@@ -814,8 +895,10 @@ function App() {
           await renderTensorToCanvas(brush.current, canvas);
           canvas.toBlob((blob) => {
             if (!blob) return;
-            setResultBlob(blob);
-            void saveLastResultBlob(blob);
+            void stampParametersAsync(blob).then((stamped) => {
+              setResultBlob(stamped);
+              void saveLastResultBlob(stamped);
+            });
           }, 'image/png');
         }
 
@@ -888,8 +971,10 @@ function App() {
           }
           canvas.toBlob((blob) => {
             if (!blob) return;
-            setResultBlob(blob);
-            void saveLastResultBlob(blob);
+            void stampParametersAsync(blob).then((stamped) => {
+              setResultBlob(stamped);
+              void saveLastResultBlob(stamped);
+            });
           }, 'image/png');
         }
         // Nothing reads the finished tensor once it's on the canvas and encoded to a PNG — and it is a
@@ -945,6 +1030,7 @@ function App() {
     persistProgressSnapshot,
     ensureBrush,
     selectionSettings.feather,
+    stampParametersAsync,
   ]);
 
   const handleCancel = useCallback(() => {
@@ -966,8 +1052,8 @@ function App() {
   const handleSaveCurrentStep = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    void saveImage(canvasToPngBlob(canvas), `dream-${mode}-step-${Date.now()}.png`);
-  }, [mode]);
+    void saveImage(stampParameters(canvasToPngBytes(canvas)), `dream-${mode}-step-${Date.now()}.png`);
+  }, [mode, stampParameters]);
 
   const handleDownload = useCallback(() => {
     if (!resultBlob) return;
@@ -1159,6 +1245,14 @@ function App() {
                 </HoverPopup>
               )}
             </div>
+
+            <ParametersFromImage
+              parameters={offeredParameters}
+              applied={parametersApplied}
+              disabled={isRunning}
+              onApply={applyOfferedParameters}
+              onDismiss={() => setOfferedParameters(null)}
+            />
 
             <FeatureNetworkPicker
               value={featureNetworkId}

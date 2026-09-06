@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { TOOLS, modifierHint, toolDefinition } from './tools';
+import type { SavedParameters } from '../ml/imageMetadata';
 import type {
   BrushSettings,
   ColorSpace,
@@ -247,6 +248,48 @@ export function VideoOptionsPanel({ fps, onFpsChange, isRunning }: VideoOptionsP
         Each sampled frame runs the full DeepDream / Style Transfer pipeline, so processing a video takes roughly
         (frame count) × (time for one image).
       </p>
+    </div>
+  );
+}
+
+interface ParametersFromImageProps {
+  parameters: SavedParameters | null;
+  applied: boolean;
+  disabled: boolean;
+  onApply: () => void;
+  onDismiss: () => void;
+}
+
+/**
+ * Offered when the picked image turns out to have been made here and still carries its settings. Applying
+ * is a choice rather than something that happens on load: rewriting every slider because of what a file
+ * contained would be a surprise, and the picture may have been opened just to look at.
+ */
+export function ParametersFromImage({ parameters, applied, disabled, onApply, onDismiss }: ParametersFromImageProps) {
+  if (!parameters) return null;
+
+  const summary =
+    parameters.mode === 'deepdream'
+      ? `DeepDream, ${parameters.dream.octaves} octaves, pattern scale ${parameters.dream.patternScale}`
+      : `Style transfer, ${parameters.style.octaves} octaves, pattern scale ${parameters.style.patternScale}`;
+
+  return (
+    <div className="found-parameters">
+      <span className="found-parameters-title">This image carries the settings it was made with</span>
+      <span className="found-parameters-summary">{summary}</span>
+      <div className="controls-actions">
+        <button
+          className="btn btn--primary"
+          onClick={onApply}
+          disabled={disabled || applied}
+          title="Restores the mode, network, preset and every slider to what produced this image."
+        >
+          {applied ? 'Settings restored' : 'Use these settings'}
+        </button>
+        <button className="btn btn--secondary" onClick={onDismiss} title="Keep the settings you have now.">
+          Dismiss
+        </button>
+      </div>
     </div>
   );
 }
