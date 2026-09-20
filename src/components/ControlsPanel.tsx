@@ -525,7 +525,7 @@ export function SliderPanel({
             label="Octaves"
             value={dreamParams.octaves}
             min={1}
-            max={6}
+            max={7}
             step={1}
             disabled={isRunning}
             tooltip="How many times the image is progressively scaled up during processing. More octaves build the pattern at multiple sizes at once, giving richer, more elaborate detail — but each extra octave takes longer to run."
@@ -618,7 +618,7 @@ export function SliderPanel({
             label="Octaves"
             value={styleParams.octaves}
             min={1}
-            max={5}
+            max={7}
             step={1}
             disabled={isRunning}
             tooltip="How many times the image is progressively scaled up during processing, letting style patterns form at multiple sizes. More octaves add detail but take longer to run."

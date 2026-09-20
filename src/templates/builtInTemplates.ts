@@ -1,8 +1,7 @@
-import { generatePaisleyPattern } from './paisleyPattern';
 import paisleyColorUrl from '../assets/templates/paisley-color.jpg';
-import paisleyBwUrl from '../assets/templates/paisley-bw.jpg';
-import hongKongUrl from '../assets/templates/hong-kong.jpg';
 import dotPaintingUrl from '../assets/templates/dot-painting.jpg';
+import eyeballsUrl from '../assets/templates/eyeballs.jpg';
+import stainedGlassUrl from '../assets/templates/stained-glass.jpg';
 import hongKong2Url from '../assets/templates/hong-kong-2.jpg';
 import starryNightUrl from '../assets/templates/starry-night.jpg';
 import discoBallUrl from '../assets/templates/disco-ball.jpg';
@@ -16,9 +15,9 @@ import crackedEarthUrl from '../assets/templates/cracked-earth.jpg';
 import pandasUrl from '../assets/templates/pandas.jpg';
 
 import paisleyColorThumb from '../assets/templates/thumbs/paisley-color.jpg';
-import paisleyBwThumb from '../assets/templates/thumbs/paisley-bw.jpg';
-import hongKongThumb from '../assets/templates/thumbs/hong-kong.jpg';
 import dotPaintingThumb from '../assets/templates/thumbs/dot-painting.jpg';
+import eyeballsThumb from '../assets/templates/thumbs/eyeballs.jpg';
+import stainedGlassThumb from '../assets/templates/thumbs/stained-glass.jpg';
 import hongKong2Thumb from '../assets/templates/thumbs/hong-kong-2.jpg';
 import starryNightThumb from '../assets/templates/thumbs/starry-night.jpg';
 import discoBallThumb from '../assets/templates/thumbs/disco-ball.jpg';
@@ -59,32 +58,11 @@ function staticTemplate(id: string, name: string, url: string, thumbnailUrl: str
   };
 }
 
-function canvasToFile(canvas: HTMLCanvasElement, filename: string): Promise<File> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (!blob) {
-        reject(new Error('Failed to generate pattern.'));
-        return;
-      }
-      resolve(new File([blob], filename, { type: 'image/png' }));
-    }, 'image/png');
-  });
-}
-
-const generatedPaisley: BuiltInTemplate = {
-  id: 'paisley-generated',
-  name: 'Paisley (Generated)',
-  getThumbnailUrl: async () => generatePaisleyPattern(160).toDataURL('image/png'),
-  getFile: async () => canvasToFile(generatePaisleyPattern(512), 'paisley-generated.png'),
-};
-
 export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
-  staticTemplate('paisley-color', 'Paisley (Color)', paisleyColorUrl, paisleyColorThumb),
-  staticTemplate('paisley-bw', 'Paisley (B&W)', paisleyBwUrl, paisleyBwThumb),
-  generatedPaisley,
-  staticTemplate('hong-kong', 'Hong Kong', hongKongUrl, hongKongThumb),
-  staticTemplate('hong-kong-2', 'Hong Kong 2', hongKong2Url, hongKong2Thumb),
+  staticTemplate('paisley-color', 'Paisley', paisleyColorUrl, paisleyColorThumb),
+  staticTemplate('hong-kong-2', 'Hong Kong', hongKong2Url, hongKong2Thumb),
   staticTemplate('dot-painting', 'Dot Painting', dotPaintingUrl, dotPaintingThumb),
+  staticTemplate('stained-glass', 'Stained Glass', stainedGlassUrl, stainedGlassThumb),
   staticTemplate('starry-night', 'Starry Night', starryNightUrl, starryNightThumb),
   staticTemplate('great-wave', 'Great Wave', greatWaveUrl, greatWaveThumb),
   staticTemplate('monet-bridge', 'Monet Bridge', monetBridgeUrl, monetBridgeThumb),
@@ -95,4 +73,5 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
   staticTemplate('flags', 'Flags', flagsUrl, flagsThumb),
   staticTemplate('faces', 'Faces', facesUrl, facesThumb),
   staticTemplate('pandas', 'Pandas', pandasUrl, pandasThumb),
+  staticTemplate('eyeballs', 'Eyeballs', eyeballsUrl, eyeballsThumb),
 ];

@@ -132,6 +132,65 @@ body {
   object-fit: contain;
 }
 
+.template-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #3a3c46;
+  border-radius: 12px;
+  background: #1b1c22;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.template-trigger:hover:not(:disabled),
+.template-trigger--open {
+  border-color: #6a6dff;
+  background: #1f212c;
+}
+
+.template-trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.template-trigger-preview {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #14151a;
+}
+
+.template-trigger-preview--empty {
+  border: 1px dashed #3a3c46;
+}
+
+.template-trigger-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.template-trigger-name {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.9);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-trigger-text small {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.45);
+}
+
 .template-popup {
   position: fixed;
   z-index: 50;
@@ -204,6 +263,27 @@ body {
 
 .builtin-template-thumb:hover:not(:disabled) {
   border-color: #6a6dff;
+}
+
+.builtin-template-thumb--active {
+  border-color: #6a6dff;
+  background: #2b2d78;
+}
+
+/* Sized and shaped like a thumbnail so it reads as one more option, not a control bolted alongside. */
+.builtin-template-thumb--upload {
+  border-style: dashed;
+}
+
+.template-upload-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border-radius: 6px;
+  background: #14151a;
+  color: rgba(255, 255, 255, 0.75);
 }
 
 .builtin-template-thumb:disabled {

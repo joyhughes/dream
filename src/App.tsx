@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ImageDropzone } from './components/ImageDropzone';
-import { BuiltInTemplatePicker } from './components/BuiltInTemplatePicker';
 import { ModeTabs } from './components/ModeTabs';
 import {
   PresetPanel,
@@ -13,7 +12,7 @@ import {
   ParametersFromImage,
 } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
-import { HoverPopup } from './components/HoverPopup';
+import { TemplatePicker } from './components/TemplatePicker';
 import { initializeML, ensureBackendHealthy } from './ml/tfSetup';
 import { loadFeatureModel } from './ml/featureModels';
 import type { FeatureModel, FeatureNetworkId } from './ml/featureModel';
@@ -158,6 +157,8 @@ function App() {
   const [basePreviewUrl, setBasePreviewUrl] = useState<string>();
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [templatePreviewUrl, setTemplatePreviewUrl] = useState<string>();
+  // Which built-in is in use, or null when the template is the user's own file.
+  const [templateId, setTemplateId] = useState<string | null>(DEFAULT_TEMPLATE_ID);
 
   const [dreamParams, setDreamParams] = useState<DreamParams>(DEFAULT_DREAM_PARAMS);
   const [styleParams, setStyleParams] = useState<StyleParams>(DEFAULT_STYLE_PARAMS);
@@ -371,6 +372,7 @@ function App() {
       const file = await defaultTemplate.getFile();
       if (cancelled) return;
       handleTemplateFile(file);
+      setTemplateId(DEFAULT_TEMPLATE_ID);
     })();
 
     return () => {
@@ -1230,19 +1232,19 @@ function App() {
               />
               {isBaseVideo && <VideoOptionsPanel fps={videoFps} onFpsChange={setVideoFps} isRunning={isRunning} />}
               {mode === 'style' && (
-                <HoverPopup
-                  trigger={
-                    <ImageDropzone
-                      label="Dream template (style)"
-                      hint="The image whose style/patterns get imprinted onto the first image"
-                      tooltip="The style image whose colors, textures, and patterns get imprinted onto your photo. Images with strong, distinctive visual patterns tend to work best. Hover to pick a built-in template."
-                      onFileSelected={handleTemplateFile}
-                      previewUrl={templatePreviewUrl}
-                    />
-                  }
-                >
-                  <BuiltInTemplatePicker onSelect={handleTemplateFile} disabled={isRunning} />
-                </HoverPopup>
+                <TemplatePicker
+                  selectedId={templateId}
+                  previewUrl={templatePreviewUrl}
+                  disabled={isRunning}
+                  onSelectBuiltIn={(id, file) => {
+                    setTemplateId(id);
+                    handleTemplateFile(file);
+                  }}
+                  onSelectFile={(file) => {
+                    setTemplateId(null);
+                    handleTemplateFile(file);
+                  }}
+                />
               )}
             </div>
 
