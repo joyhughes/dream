@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { TOOLS, modifierHint, toolDefinition } from './tools';
 import type { SavedParameters } from '../ml/imageMetadata';
+import { animatableFor, readParam, type AnimationSettings } from '../ml/animation';
 import type {
   BrushSettings,
   ColorSpace,
@@ -247,6 +248,160 @@ export function VideoOptionsPanel({ fps, onFpsChange, isRunning }: VideoOptionsP
       <p className="field-hint">
         Each sampled frame runs the full DeepDream / Style Transfer pipeline, so processing a video takes roughly
         (frame count) × (time for one image).
+      </p>
+    </div>
+  );
+}
+
+interface AnimationPanelProps {
+  mode: Mode;
+  settings: AnimationSettings;
+  onSettingsChange: (settings: AnimationSettings) => void;
+  dreamParams: DreamParams;
+  styleParams: StyleParams;
+  isRunning: boolean;
+  /** False when there is nothing to render from — no photo, a video, or no style template. */
+  canRender: boolean;
+  summary: string;
+  onRender: () => void;
+}
+
+/**
+ * Picking what to sweep and over what range.
+ *
+ * A parameter starts at its current value on both ends, so switching one on and pressing render changes
+ * nothing until a range is actually set — the settings on screen are the obvious place to begin, and the
+ * alternative of guessing a range would quietly discard what the user had already dialled in.
+ */
+export function AnimationPanel({
+  mode,
+  settings,
+  onSettingsChange,
+  dreamParams,
+  styleParams,
+  isRunning,
+  canRender,
+  summary,
+  onRender,
+}: AnimationPanelProps) {
+  const descriptors = animatableFor(mode);
+  const params = mode === 'deepdream' ? dreamParams : styleParams;
+
+  const trackFor = (path: string) => settings.tracks.find((track) => track.path === path);
+
+  const toggle = (path: string, on: boolean) => {
+    if (!on) {
+      onSettingsChange({ ...settings, tracks: settings.tracks.filter((track) => track.path !== path) });
+      return;
+    }
+    const current = readParam(params, path);
+    onSettingsChange({ ...settings, tracks: [...settings.tracks, { path, from: current, to: current }] });
+  };
+
+  const setEnd = (path: string, end: 'from' | 'to', value: number) => {
+    onSettingsChange({
+      ...settings,
+      tracks: settings.tracks.map((track) => (track.path === path ? { ...track, [end]: value } : track)),
+    });
+  };
+
+  return (
+    <div className="slider-panel">
+      <p className="field-hint">
+        Sweeps the chosen settings from one value to another, running the whole pipeline once per frame and
+        saving the result as a video. Several can move at once, each over its own range.
+      </p>
+
+      <div className="animation-tracks">
+        {descriptors.map((descriptor) => {
+          const track = trackFor(descriptor.path);
+          return (
+            <div key={descriptor.path} className="animation-track">
+              <Toggle
+                label={descriptor.label}
+                checked={!!track}
+                disabled={isRunning}
+                tooltip={`Sweep ${descriptor.label} across the animation. Its slider range is ${descriptor.min} to ${descriptor.max}, but the ends below are not limited to it.`}
+                onChange={(on) => toggle(descriptor.path, on)}
+              />
+              {track && (
+                <div className="animation-range">
+                  <label>
+                    <span>from</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      className="slider-value"
+                      value={formatReadout(track.from)}
+                      disabled={isRunning}
+                      aria-label={`${descriptor.label} start value`}
+                      onChange={(e) => {
+                        const parsed = Number(e.target.value.trim());
+                        if (e.target.value.trim() !== '' && Number.isFinite(parsed)) {
+                          setEnd(descriptor.path, 'from', parsed);
+                        }
+                      }}
+                    />
+                  </label>
+                  <label>
+                    <span>to</span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      className="slider-value"
+                      value={formatReadout(track.to)}
+                      disabled={isRunning}
+                      aria-label={`${descriptor.label} end value`}
+                      onChange={(e) => {
+                        const parsed = Number(e.target.value.trim());
+                        if (e.target.value.trim() !== '' && Number.isFinite(parsed)) {
+                          setEnd(descriptor.path, 'to', parsed);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <Slider
+        label="Frames"
+        value={settings.frames}
+        min={2}
+        max={120}
+        step={1}
+        disabled={isRunning}
+        tooltip="How many frames the sweep is divided into. Every frame is a full run, so this multiplies the time a single Generate takes — and on a phone the count is capped further by how many frames fit in memory at once."
+        onChange={(v) => onSettingsChange({ ...settings, frames: Math.max(2, Math.round(v)) })}
+      />
+      <Slider
+        label="Playback frame rate"
+        value={settings.fps}
+        min={1}
+        max={30}
+        step={1}
+        disabled={isRunning}
+        tooltip="How fast the finished video plays. It costs nothing to change — the frames are already rendered — so it only decides whether the sweep reads as a slow reveal or a quick flick."
+        onChange={(v) => onSettingsChange({ ...settings, fps: Math.max(1, Math.round(v)) })}
+      />
+
+      <div className="controls-actions">
+        <button
+          className="btn btn--primary"
+          onClick={onRender}
+          disabled={isRunning || !canRender || settings.tracks.length === 0}
+          title="Renders every frame of the sweep and downloads the result as a video."
+        >
+          Render animation
+        </button>
+      </div>
+      <p className="field-hint">
+        {settings.tracks.length === 0
+          ? 'Choose at least one setting to sweep.'
+          : `Sweeping ${summary} over ${settings.frames} frames.`}
       </p>
     </div>
   );

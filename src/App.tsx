@@ -10,6 +10,7 @@ import {
   BrushPanel,
   SelectionPanel,
   ParametersFromImage,
+  AnimationPanel,
 } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
 import { TemplatePicker } from './components/TemplatePicker';
@@ -35,6 +36,13 @@ import { MovieRecorder, isMovieRecordingSupported } from './ml/movieRecorder';
 import { encodeFrameSequence } from './ml/frameEncoding';
 import { VideoFrameSource } from './ml/videoFrames';
 import { DreamBrush } from './ml/brush';
+import {
+  DEFAULT_ANIMATION,
+  animatableFor,
+  describeTracks,
+  paramsAtFrame,
+  type AnimationSettings,
+} from './ml/animation';
 import {
   couldCarryParameters,
   embedParameters,
@@ -183,6 +191,8 @@ function App() {
   // Bumped whenever the mask changes, purely to drive a redraw of the overlay and the panel's summary —
   // the mask itself lives in a ref, since it is written pixel by pixel and must not clone on every stroke.
   const [selectionVersion, setSelectionVersion] = useState(0);
+
+  const [animation, setAnimation] = useState<AnimationSettings>(DEFAULT_ANIMATION);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -1035,6 +1045,129 @@ function App() {
     stampParametersAsync,
   ]);
 
+  /**
+   * Renders one frame per step of a parameter sweep and encodes them into a video.
+   *
+   * Every frame is an independent run from the original photo — what you would get by setting those
+   * sliders and pressing Generate — so the result shows the parameter's effect rather than an image
+   * accumulating changes. Frames are held as bitmaps until the whole sequence is encoded, so the same
+   * memory budget that caps a video's length caps this too.
+   */
+  const handleRenderAnimation = useCallback(async () => {
+    if (!baseFile || isBaseVideo || !featureModel || animation.tracks.length === 0) return;
+    if (mode === 'style' && !templateFile) return;
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const pauseController = new PauseController();
+    pauseControllerRef.current = pauseController;
+
+    let baseTensor: tf.Tensor3D | null = null;
+    let templateTensor: tf.Tensor3D | null = null;
+    const captured: ImageBitmap[] = [];
+
+    const descriptors = animatableFor(mode);
+    const stepsFor = (frameIndex: number) =>
+      mode === 'deepdream'
+        ? paramsAtFrame(dreamParams, animation, frameIndex, descriptors)
+        : paramsAtFrame(styleParams, animation, frameIndex, descriptors);
+
+    try {
+      setHasResult(false);
+      setResultBlob(null);
+      setIsPaused(false);
+      setEngineStatus({ phase: 'running', step: 0, totalSteps: 1 });
+      await ensureBackendHealthy();
+
+      const limits = getDeviceLimits();
+      const workingMax = mode === 'style' ? limits.styleWorkingMaxDimension : limits.workingMaxDimension;
+
+      if (mode === 'style') {
+        const templateImg = await loadImageFromFile(templateFile!);
+        templateTensor = imageToWorkingTensor(templateImg, workingMax);
+      }
+
+      const baseImg = await loadImageFromFile(baseFile);
+      baseTensor = imageToWorkingTensor(baseImg, workingMax);
+
+      const [workingW, workingH] = workingDimensions(baseTensor.shape[1], baseTensor.shape[0], workingMax);
+      const frameCount = Math.min(animation.frames, maxFramesInStore(workingW, workingH));
+
+      // Progress counts whole frames: a per-step total would jump around, since the sweep may be moving
+      // the very parameter that decides how many steps a frame takes.
+      for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+        if (controller.signal.aborted) break;
+        setFrameProgress({ index: frameIndex, total: frameCount });
+        setEngineStatus({ phase: 'running', step: frameIndex, totalSteps: frameCount });
+
+        await pauseController.waitIfPaused(controller.signal);
+        if (controller.signal.aborted) break;
+
+        const frameParams = stepsFor(frameIndex);
+        const result =
+          mode === 'deepdream'
+            ? await runDeepDream(baseTensor, {
+                featureModel,
+                preset: presets.find((p) => p.id === selectedPresetId)!,
+                params: frameParams as DreamParams,
+                signal: controller.signal,
+                pauseController,
+              })
+            : await runStyleTransfer(baseTensor, templateTensor!, {
+                featureModel,
+                params: frameParams as StyleParams,
+                signal: controller.signal,
+                pauseController,
+              });
+
+        try {
+          if (canvasRef.current) {
+            await renderTensorToCanvas(result, canvasRef.current);
+            captured.push(await createImageBitmap(canvasRef.current));
+          }
+        } finally {
+          result.dispose();
+        }
+      }
+
+      setFrameProgress(null);
+
+      if (captured.length > 0 && canvasRef.current) {
+        const holdMs = 1000 / Math.max(1, animation.fps);
+        const videoBlob = await encodeFrameSequence(
+          captured.map((bitmap) => ({ bitmap, holdMs })),
+          canvasRef.current.width,
+          canvasRef.current.height,
+        );
+        downloadBlob(videoBlob, `dream-${mode}-sweep-${Date.now()}.webm`);
+      }
+
+      setEngineStatus({ phase: 'done' });
+    } catch (err) {
+      console.error('Animation failed:', err);
+      setEngineStatus({ phase: 'error', message: describeRunError(err) });
+    } finally {
+      baseTensor?.dispose();
+      templateTensor?.dispose();
+      captured.forEach((bitmap) => bitmap.close());
+      abortControllerRef.current = null;
+      pauseControllerRef.current = null;
+      setIsPaused(false);
+      setFrameProgress(null);
+    }
+  }, [
+    animation,
+    baseFile,
+    isBaseVideo,
+    featureModel,
+    mode,
+    templateFile,
+    dreamParams,
+    styleParams,
+    presets,
+    selectedPresetId,
+  ]);
+
   const handleCancel = useCallback(() => {
     abortControllerRef.current?.abort();
   }, []);
@@ -1280,6 +1413,20 @@ function App() {
               styleParams={styleParams}
               onStyleParamsChange={setStyleParams}
               isRunning={isRunning}
+            />
+          </ControlGroup>
+
+          <ControlGroup title="Animation" defaultOpen={false}>
+            <AnimationPanel
+              mode={mode}
+              settings={animation}
+              onSettingsChange={setAnimation}
+              dreamParams={dreamParams}
+              styleParams={styleParams}
+              isRunning={isRunning}
+              canRender={!!baseFile && !isBaseVideo && !!featureModel && (mode === 'deepdream' || !!templateFile)}
+              summary={describeTracks(animation, animatableFor(mode))}
+              onRender={() => void handleRenderAnimation()}
             />
           </ControlGroup>
 
