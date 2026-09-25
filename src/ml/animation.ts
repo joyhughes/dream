@@ -134,6 +134,27 @@ export function paramsAtFrame<T extends ParamsLike>(
   return result;
 }
 
+/**
+ * Where a single frame sits, in the terms the sweep was set up in — "Pattern scale 2.5, Blur strength 0.8".
+ * A frame number alone says nothing about which value is on screen, which is the reason for watching.
+ */
+export function describeFrame(
+  params: DreamParams | StyleParams,
+  settings: AnimationSettings,
+  descriptors: AnimatableParam[],
+): string {
+  return settings.tracks
+    .map((track) => {
+      const label = descriptors.find((entry) => entry.path === track.path)?.label ?? track.path;
+      // Three significant figures: interpolation lands on values like 2.7500000000000004, and a status
+      // line wants "1.43" rather than "1.42857". Number() also undoes toPrecision's exponent notation,
+      // so a large weight reads as 1250 rather than 1.25e+3.
+      const value = Number(readParam(params, track.path).toPrecision(3));
+      return `${label} ${value}`;
+    })
+    .join(', ');
+}
+
 /** A short line naming what is being swept, for the status text and the saved file. */
 export function describeTracks(settings: AnimationSettings, descriptors: AnimatableParam[]): string {
   if (settings.tracks.length === 0) return 'nothing selected';

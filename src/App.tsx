@@ -39,6 +39,7 @@ import { DreamBrush } from './ml/brush';
 import {
   DEFAULT_ANIMATION,
   animatableFor,
+  describeFrame,
   describeTracks,
   paramsAtFrame,
   type AnimationSettings,
@@ -179,7 +180,9 @@ function App() {
   const [recordMovie, setRecordMovie] = useState(false);
   const [isRecordingMovie, setIsRecordingMovie] = useState(false);
   const [videoFps, setVideoFps] = useState(8);
-  const [frameProgress, setFrameProgress] = useState<{ index: number; total: number } | null>(null);
+  const [frameProgress, setFrameProgress] = useState<{ index: number; total: number; note?: string } | null>(
+    null,
+  );
 
   const [tool, setTool] = useState<ToolId>('none');
   const [brushSettings, setBrushSettings] = useState<BrushSettings>(DEFAULT_BRUSH);
@@ -1093,17 +1096,35 @@ function App() {
       const [workingW, workingH] = workingDimensions(baseTensor.shape[1], baseTensor.shape[0], workingMax);
       const frameCount = Math.min(animation.frames, maxFramesInStore(workingW, workingH));
 
-      // Progress counts whole frames: a per-step total would jump around, since the sweep may be moving
-      // the very parameter that decides how many steps a frame takes.
       for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
         if (controller.signal.aborted) break;
-        setFrameProgress({ index: frameIndex, total: frameCount });
-        setEngineStatus({ phase: 'running', step: frameIndex, totalSteps: frameCount });
 
         await pauseController.waitIfPaused(controller.signal);
         if (controller.signal.aborted) break;
 
         const frameParams = stepsFor(frameIndex);
+
+        // Where the sweep has got to, in the terms the user set it up in. A frame number alone says
+        // nothing about which value is on screen, which is the whole reason for watching a sweep.
+        setFrameProgress({
+          index: frameIndex,
+          total: frameCount,
+          note: describeFrame(frameParams, animation, descriptors),
+        });
+
+        // The step counter belongs to the frame being rendered, not the sweep: the sweep's own position is
+        // the frame count above, and a sweep that moves octaves or step count has no fixed total anyway.
+        const stepsThisFrame = Math.max(1, frameParams.octaves * frameParams.stepsPerOctave);
+        const showStep = async ({ octave, step, image }: { octave: number; step: number; image: tf.Tensor3D }) => {
+          setEngineStatus({
+            phase: 'running',
+            step: Math.min(stepsThisFrame - 1, octave * frameParams.stepsPerOctave + step),
+            totalSteps: stepsThisFrame,
+          });
+          if (canvasRef.current) await renderTensorToCanvas(image, canvasRef.current);
+          persistProgressSnapshot();
+        };
+
         const result =
           mode === 'deepdream'
             ? await runDeepDream(baseTensor, {
@@ -1112,12 +1133,14 @@ function App() {
                 params: frameParams as DreamParams,
                 signal: controller.signal,
                 pauseController,
+                onProgress: showStep,
               })
             : await runStyleTransfer(baseTensor, templateTensor!, {
                 featureModel,
                 params: frameParams as StyleParams,
                 signal: controller.signal,
                 pauseController,
+                onProgress: showStep,
               });
 
         try {
@@ -1166,6 +1189,7 @@ function App() {
     styleParams,
     presets,
     selectedPresetId,
+    persistProgressSnapshot,
   ]);
 
   const handleCancel = useCallback(() => {
@@ -1337,7 +1361,11 @@ function App() {
             isRecordingMovie={isRecordingMovie}
             recordingSupported={recordingSupported}
             recordUnavailableForVideo={isBaseVideo}
-            frameProgressLabel={frameProgress ? `Frame ${frameProgress.index + 1} / ${frameProgress.total}` : null}
+            frameProgressLabel={
+              frameProgress
+                ? `Frame ${frameProgress.index + 1} / ${frameProgress.total}${frameProgress.note ? ` · ${frameProgress.note}` : ''}`
+                : null
+            }
             modeTabs={<ModeTabs mode={mode} onChange={setMode} disabled={isRunning} />}
             onGenerate={handleGenerate}
             onCancel={handleCancel}
