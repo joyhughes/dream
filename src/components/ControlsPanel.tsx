@@ -1,7 +1,13 @@
 import { useState, type ReactNode } from 'react';
 import { TOOLS, modifierHint, toolDefinition } from './tools';
 import type { SavedParameters } from '../ml/imageMetadata';
-import { animatableFor, readParam, type AnimationSettings } from '../ml/animation';
+import {
+  animatableFor,
+  canSweepLogarithmically,
+  readParam,
+  type AnimationSettings,
+  type TrackCurve,
+} from '../ml/animation';
 import type {
   BrushSettings,
   ColorSpace,
@@ -305,6 +311,13 @@ export function AnimationPanel({
     });
   };
 
+  const setCurve = (path: string, curve: TrackCurve) => {
+    onSettingsChange({
+      ...settings,
+      tracks: settings.tracks.map((track) => (track.path === path ? { ...track, curve } : track)),
+    });
+  };
+
   return (
     <div className="slider-panel">
       <p className="field-hint">
@@ -359,6 +372,23 @@ export function AnimationPanel({
                         }
                       }}
                     />
+                  </label>
+                  <label
+                    className={`animation-curve${canSweepLogarithmically(track) ? '' : ' animation-curve--unavailable'}`}
+                    title={
+                      canSweepLogarithmically(track)
+                        ? `Step ${descriptor.label} by a constant ratio rather than a constant amount, so each frame is the same proportional change. Worth it when the range covers orders of magnitude — the low end gets the frames where the difference is visible.`
+                        : 'A logarithmic sweep multiplies by a fixed ratio each frame, which cannot start at or cross zero. Give both ends a value above zero to use it.'
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={track.curve === 'log' && canSweepLogarithmically(track)}
+                      disabled={isRunning || !canSweepLogarithmically(track)}
+                      aria-label={`Sweep ${descriptor.label} logarithmically`}
+                      onChange={(e) => setCurve(descriptor.path, e.target.checked ? 'log' : 'linear')}
+                    />
+                    <span>log</span>
                   </label>
                 </div>
               )}

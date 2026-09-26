@@ -382,6 +382,21 @@ body {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
+/* Sits at the end of the range row, where it reads as a property of the range rather than a setting of its own. */
+.animation-curve {
+  gap: 0.25rem;
+}
+
+.animation-curve input {
+  margin: 0;
+}
+
+/* Ranges that touch zero cannot be swept by a ratio. The control stays visible, so the reason it is out
+   of reach is one hover away rather than a control that silently comes and goes. */
+.animation-curve--unavailable {
+  opacity: 0.4;
+}
+
 .tool-row {
   display: flex;
   flex-wrap: wrap;

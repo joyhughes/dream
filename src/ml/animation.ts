@@ -61,11 +61,40 @@ export function animatableFor(mode: Mode): AnimatableParam[] {
   return mode === 'deepdream' ? DREAM_ANIMATABLE : STYLE_ANIMATABLE;
 }
 
+/**
+ * How a track gets from one end of its range to the other.
+ *
+ * Linear divides the range evenly, which is what a sweep wants when the numbers are evenly meaningful —
+ * octaves 1 to 7, pattern scale 1 to 10. It is the wrong shape for a setting whose effect is a matter of
+ * orders of magnitude: style weight 1 to 2000 spends its first frame going from 1 to 21, a change that
+ * rewrites the picture, and its last going from 1980 to 2000, a change nobody can see. Logarithmic
+ * multiplies by a constant ratio each frame instead, so every frame is the same proportional step and the
+ * interesting end of the range gets the frames it deserves.
+ */
+export type TrackCurve = 'linear' | 'log';
+
 /** One parameter's journey across the animation. */
 export interface AnimationTrack {
   path: string;
   from: number;
   to: number;
+  /** Absent means linear, so a track from before this existed reads as the one it was rendered with. */
+  curve?: TrackCurve;
+}
+
+/**
+ * Whether a track's ends admit a logarithmic sweep at all.
+ *
+ * A constant ratio cannot cross or start at zero — there is no number you can multiply 0 by to reach 5,
+ * and no finite count of steps from 5 down to 0. Several of these parameters have ranges that start at
+ * zero, so the curve is offered everywhere but only honoured where it means something.
+ */
+export function canSweepLogarithmically(track: AnimationTrack): boolean {
+  return track.from > 0 && track.to > 0;
+}
+
+function isLogarithmic(track: AnimationTrack): boolean {
+  return track.curve === 'log' && canSweepLogarithmically(track);
 }
 
 export interface AnimationSettings {
@@ -101,14 +130,24 @@ export function withParam<T extends ParamsLike>(params: T, path: string, value: 
 }
 
 /**
- * Where a track sits on a given frame. The first frame is exactly `from` and the last exactly `to`, so a
- * sweep covers the range it was asked for rather than stopping a step short of the end.
+ * Where a track sits on a given frame, along whichever curve the track was given. The first frame is
+ * exactly `from` and the last exactly `to`, so a sweep covers the range it was asked for rather than
+ * stopping a step short of the end.
  *
  * A single-frame animation sits at `from`: with nowhere to travel, the start is the only defensible answer.
  */
 export function valueAtFrame(track: AnimationTrack, frameIndex: number, frameCount: number, integer: boolean): number {
   const progress = frameCount <= 1 ? 0 : frameIndex / (frameCount - 1);
-  const value = track.from + (track.to - track.from) * progress;
+
+  // Both formulas land a hair off their own endpoint at the extremes — 0.005 + (0.1 - 0.005) is not
+  // exactly 0.1 — and the promise above is worth more than the arithmetic. Returning the ends verbatim
+  // also spares the frame description a readout of 1999.9999999999998.
+  if (progress <= 0) return integer ? Math.round(track.from) : track.from;
+  if (progress >= 1) return integer ? Math.round(track.to) : track.to;
+
+  const value = isLogarithmic(track)
+    ? track.from * Math.pow(track.to / track.from, progress)
+    : track.from + (track.to - track.from) * progress;
   return integer ? Math.round(value) : value;
 }
 
@@ -162,7 +201,8 @@ export function describeTracks(settings: AnimationSettings, descriptors: Animata
   return settings.tracks
     .map((track) => {
       const label = descriptors.find((entry) => entry.path === track.path)?.label ?? track.path;
-      return `${label} ${track.from} to ${track.to}`;
+      const curve = isLogarithmic(track) ? ' (log)' : '';
+      return `${label} ${track.from} to ${track.to}${curve}`;
     })
     .join(', ');
 }
