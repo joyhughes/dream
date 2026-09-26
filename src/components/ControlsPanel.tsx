@@ -374,7 +374,7 @@ export function AnimationPanel({
         max={120}
         step={1}
         disabled={isRunning}
-        tooltip="How many frames the sweep is divided into. Every frame is a full run, so this multiplies the time a single Generate takes — and on a phone the count is capped further by how many frames fit in memory at once."
+        tooltip="How many frames the sweep is divided into. Every frame is a full run, so this multiplies the time a single Generate takes. Frames are held compressed while the sweep runs, so the count asked for is the count rendered; if a sweep ever did outgrow the memory it is allowed, it would step through its range more coarsely rather than stop partway along it."
         onChange={(v) => onSettingsChange({ ...settings, frames: Math.max(2, Math.round(v)) })}
       />
       <Slider

@@ -22,6 +22,7 @@ import { runDeepDream } from './ml/deepdream';
 import { runStyleTransfer } from './ml/styleTransfer';
 import { imageToWorkingTensor, loadImageFromFile, renderTensorToCanvas, workingDimensions } from './ml/imageUtils';
 import { getDeviceLimits, maxFramesInStore } from './ml/deviceLimits';
+import { CompressedFrameStore } from './ml/frameStore';
 import {
   clearLastResult,
   loadBaseImage,
@@ -1067,7 +1068,7 @@ function App() {
 
     let baseTensor: tf.Tensor3D | null = null;
     let templateTensor: tf.Tensor3D | null = null;
-    const captured: ImageBitmap[] = [];
+    const captured = new CompressedFrameStore();
 
     const descriptors = animatableFor(mode);
     const stepsFor = (frameIndex: number) =>
@@ -1093,11 +1094,13 @@ function App() {
       const baseImg = await loadImageFromFile(baseFile);
       baseTensor = imageToWorkingTensor(baseImg, workingMax);
 
-      const [workingW, workingH] = workingDimensions(baseTensor.shape[1], baseTensor.shape[0], workingMax);
-      const frameCount = Math.min(animation.frames, maxFramesInStore(workingW, workingH));
-
-      for (let frameIndex = 0; frameIndex < frameCount; frameIndex++) {
+      // Every frame of the sweep is rendered. The frame store holds them compressed, so the byte budget
+      // that keeps a phone's tab alive no longer works out to a couple of dozen frames of a large image
+      // — and in the rare case it does bind, the store thins what it already has and raises its stride,
+      // which costs the sweep resolution rather than cutting it off partway along its range.
+      for (let frameIndex = 0; frameIndex < animation.frames; frameIndex++) {
         if (controller.signal.aborted) break;
+        if (!captured.wants(frameIndex)) continue;
 
         await pauseController.waitIfPaused(controller.signal);
         if (controller.signal.aborted) break;
@@ -1108,7 +1111,7 @@ function App() {
         // nothing about which value is on screen, which is the whole reason for watching a sweep.
         setFrameProgress({
           index: frameIndex,
-          total: frameCount,
+          total: animation.frames,
           note: describeFrame(frameParams, animation, descriptors),
         });
 
@@ -1146,7 +1149,7 @@ function App() {
         try {
           if (canvasRef.current) {
             await renderTensorToCanvas(result, canvasRef.current);
-            captured.push(await createImageBitmap(canvasRef.current));
+            await captured.add(canvasRef.current);
           }
         } finally {
           result.dispose();
@@ -1158,7 +1161,7 @@ function App() {
       if (captured.length > 0 && canvasRef.current) {
         const holdMs = 1000 / Math.max(1, animation.fps);
         const videoBlob = await encodeFrameSequence(
-          captured.map((bitmap) => ({ bitmap, holdMs })),
+          captured.timed(holdMs),
           canvasRef.current.width,
           canvasRef.current.height,
         );
@@ -1172,7 +1175,7 @@ function App() {
     } finally {
       baseTensor?.dispose();
       templateTensor?.dispose();
-      captured.forEach((bitmap) => bitmap.close());
+      captured.clear();
       abortControllerRef.current = null;
       pauseControllerRef.current = null;
       setIsPaused(false);

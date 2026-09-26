@@ -21,7 +21,11 @@ export interface TimedFrame {
  * this ties each frame's on-screen duration in the output to the `holdMs` asked for, not to real
  * capture timing.
  */
-export async function encodeFrameSequence(frames: TimedFrame[], width: number, height: number): Promise<Blob> {
+export async function encodeFrameSequence(
+  frames: Iterable<TimedFrame> | AsyncIterable<TimedFrame>,
+  width: number,
+  height: number,
+): Promise<Blob> {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -50,16 +54,26 @@ export async function encodeFrameSequence(frames: TimedFrame[], width: number, h
 
   recorder.start();
 
-  for (const frame of frames) {
+  // Each frame's hold is measured against a running schedule rather than slept for after the draw,
+  // so whatever the source spends producing the next frame — decoding a stored one, most of all —
+  // comes out of that frame's own hold instead of being added to it.
+  let drawn = 0;
+  let dueAt = performance.now();
+
+  for await (const frame of frames) {
     draw(frame.bitmap);
-    await sleep(frame.holdMs);
+    drawn += 1;
+    dueAt += frame.holdMs;
+    await sleep(Math.max(0, dueAt - performance.now()));
   }
 
-  if (frames.length > 0) {
-    draw(frames[frames.length - 1].bitmap);
+  if (drawn > 0) {
+    // The canvas still holds the last frame drawn, so this needs no bitmap of its own — and the
+    // source may well have closed that one already. requestFrame() only queues the capture:
+    // stopping immediately after can drop it before the browser processes it, truncating the
+    // recording right before its intended final duration.
+    track.requestFrame();
   }
-  // requestFrame() only queues the capture — stopping immediately after can drop it before the
-  // browser processes it, truncating the recording right before its intended final duration.
   await sleep(150);
 
   const blob = await new Promise<Blob>((resolve) => {
