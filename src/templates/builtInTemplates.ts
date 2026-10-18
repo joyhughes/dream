@@ -13,6 +13,7 @@ import flowerBedsUrl from '../assets/templates/flower-beds.jpg';
 import lightningUrl from '../assets/templates/lightning.jpg';
 import crackedEarthUrl from '../assets/templates/cracked-earth.jpg';
 import pandasUrl from '../assets/templates/pandas.jpg';
+import sunflowersUrl from '../assets/templates/sunflowers.jpg';
 
 import paisleyColorThumb from '../assets/templates/thumbs/paisley-color.jpg';
 import dotPaintingThumb from '../assets/templates/thumbs/dot-painting.jpg';
@@ -29,6 +30,7 @@ import flowerBedsThumb from '../assets/templates/thumbs/flower-beds.jpg';
 import lightningThumb from '../assets/templates/thumbs/lightning.jpg';
 import crackedEarthThumb from '../assets/templates/thumbs/cracked-earth.jpg';
 import pandasThumb from '../assets/templates/thumbs/pandas.jpg';
+import sunflowersThumb from '../assets/templates/thumbs/sunflowers.jpg';
 
 export interface BuiltInTemplate {
   id: string;
@@ -67,6 +69,7 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
   staticTemplate('great-wave', 'Great Wave', greatWaveUrl, greatWaveThumb),
   staticTemplate('monet-bridge', 'Monet Bridge', monetBridgeUrl, monetBridgeThumb),
   staticTemplate('flower-beds', 'Flower Beds', flowerBedsUrl, flowerBedsThumb),
+  staticTemplate('sunflowers', 'Sunflowers', sunflowersUrl, sunflowersThumb),
   staticTemplate('disco-ball', 'Disco Ball', discoBallUrl, discoBallThumb),
   staticTemplate('lightning', 'Lightning', lightningUrl, lightningThumb),
   staticTemplate('cracked-earth', 'Cracked Earth', crackedEarthUrl, crackedEarthThumb),
