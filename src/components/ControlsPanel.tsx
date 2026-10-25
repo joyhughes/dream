@@ -1114,7 +1114,7 @@ export function ActionsBar({
               ? "This browser doesn't support recording canvas video (MediaRecorder / captureStream)."
               : recordUnavailableForVideo
                 ? "Not available when processing a video — the processed video downloads automatically when it's done."
-                : 'When armed, Generate also records a movie of the run: two seconds on the starting image, the full render at a steady frame rate, then two seconds on the final result. Downloads automatically as .webm when done.'
+                : 'When armed, Generate also records a movie of the run: two seconds on the starting image, the full render at a steady frame rate, then two seconds on the final result. Downloads automatically when done, as .mp4 (or .webm in browsers without MP4 recording).'
           }
         >
           <RecordIcon />

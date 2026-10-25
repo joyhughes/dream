@@ -34,7 +34,7 @@ import { canvasToPngBytes, downloadBlob, saveImage } from './ml/imageSaving';
 import { isPng } from './ml/pngText';
 import { PauseController } from './ml/pauseController';
 import { MovieRecorder, isMovieRecordingSupported } from './ml/movieRecorder';
-import { encodeFrameSequence } from './ml/frameEncoding';
+import { encodeFrameSequence, videoFileExtension } from './ml/frameEncoding';
 import { VideoFrameSource } from './ml/videoFrames';
 import { DreamBrush } from './ml/brush';
 import {
@@ -954,7 +954,7 @@ function App() {
           const holdMs = 1000 / videoFps;
           const outFrames = processedVideoFrames.map((bitmap) => ({ bitmap, holdMs }));
           const videoBlob = await encodeFrameSequence(outFrames, canvasRef.current.width, canvasRef.current.height);
-          downloadBlob(videoBlob, `dream-${mode}-video-${Date.now()}.webm`);
+          downloadBlob(videoBlob, `dream-${mode}-video-${Date.now()}.${videoFileExtension(videoBlob)}`);
         }
 
         setEngineStatus({ phase: 'done' });
@@ -1010,7 +1010,7 @@ function App() {
           const videoBlob = await movieRecorder.finish();
           movieRecorderRef.current = null;
           setIsRecordingMovie(false);
-          downloadBlob(videoBlob, `dream-${mode}-movie-${Date.now()}.webm`);
+          downloadBlob(videoBlob, `dream-${mode}-movie-${Date.now()}.${videoFileExtension(videoBlob)}`);
         }
       }
     } catch (err) {
@@ -1165,7 +1165,7 @@ function App() {
           canvasRef.current.width,
           canvasRef.current.height,
         );
-        downloadBlob(videoBlob, `dream-${mode}-sweep-${Date.now()}.webm`);
+        downloadBlob(videoBlob, `dream-${mode}-sweep-${Date.now()}.${videoFileExtension(videoBlob)}`);
       }
 
       setEngineStatus({ phase: 'done' });

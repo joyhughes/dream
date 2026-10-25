@@ -1,6 +1,16 @@
+/**
+ * H.264 MP4 first, since it plays everywhere — QuickTime, iOS Photos, and every upload target — where WebM
+ * does not. Chrome and Safari record it directly; Firefox can't, and falls through to WebM. The codec is
+ * named without a profile/level so the browser picks one that fits the frame size.
+ */
 export function pickSupportedVideoMimeType(): string | undefined {
-  const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+  const candidates = ['video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
   return candidates.find((type) => MediaRecorder.isTypeSupported(type));
+}
+
+/** The extension matching what was actually recorded, which depends on the browser. */
+export function videoFileExtension(blob: Blob): string {
+  return blob.type.startsWith('video/mp4') ? 'mp4' : 'webm';
 }
 
 export function sleep(ms: number): Promise<void> {
@@ -77,7 +87,7 @@ export async function encodeFrameSequence(
   await sleep(150);
 
   const blob = await new Promise<Blob>((resolve) => {
-    recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'video/webm' }));
+    recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || mimeType || 'video/webm' }));
     recorder.stop();
   });
 
