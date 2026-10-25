@@ -12,6 +12,15 @@ const VGG19_MODEL_URL =
   'https://cdn.jsdelivr.net/gh/paulsp94/tfjs_vgg19_imagenet@ea6bea2ac90e492592b552346e02abcb0eafa443/model/model.json';
 
 /**
+ * The same commit straight from GitHub. jsDelivr has been seen serving a truncated Brotli copy of one shard
+ * (199 bytes of a 4 MB file) to every browser, since browsers always ask for Brotli; the response is marked
+ * immutable, so a browser that got it once keeps it. Fetching from a different URL sidesteps both the bad
+ * edge copy and the poisoned browser cache.
+ */
+const VGG19_FALLBACK_MODEL_URL =
+  'https://raw.githubusercontent.com/paulsp94/tfjs_vgg19_imagenet/ea6bea2ac90e492592b552346e02abcb0eafa443/model/model.json';
+
+/**
  * Unlike MobileNet, VGG-19 is fully convolutional here (declared input shape [null, null, null, 3]), so
  * tiles can be fed at close to native resolution instead of being squashed to a fixed 224. That is a real
  * quality gain — no resampling between the tile and what the network scores — but activation memory grows
@@ -60,8 +69,27 @@ function preprocessForVgg19(image01: tf.Tensor3D): tf.Tensor4D {
   });
 }
 
+/** True when the shards add up to every float32 weight the manifest declares. A short shard fails this. */
+function weightsAreComplete(artifacts: tf.io.ModelArtifacts): boolean {
+  const data = artifacts.weightData;
+  if (!data || !artifacts.weightSpecs) return false;
+  const received = (Array.isArray(data) ? data : [data]).reduce((sum, buffer) => sum + buffer.byteLength, 0);
+  const expected = artifacts.weightSpecs.reduce((sum, spec) => sum + 4 * spec.shape.reduce((a, b) => a * b, 1), 0);
+  return received === expected;
+}
+
+async function loadVgg19Artifacts(): Promise<tf.io.ModelArtifacts> {
+  const artifacts = await tf.io.http(VGG19_MODEL_URL).load!();
+  if (weightsAreComplete(artifacts)) return artifacts;
+
+  console.warn('VGG-19 weights from jsDelivr were incomplete; reloading them from GitHub.');
+  const fallback = await tf.io.http(VGG19_FALLBACK_MODEL_URL).load!();
+  if (!weightsAreComplete(fallback)) throw new Error('VGG-19 weights arrived incomplete from both sources.');
+  return fallback;
+}
+
 export async function loadVgg19FeatureModel(): Promise<FeatureModel> {
-  const model = await tf.loadLayersModel(VGG19_MODEL_URL);
+  const model = await tf.loadLayersModel(tf.io.fromMemory(await loadVgg19Artifacts()));
 
   // One sub-model per distinct set of requested layers. VGG is a straight chain, so a sub-model that stops
   // at the deepest layer asked for skips everything past it; caching by name set means that sub-model is
