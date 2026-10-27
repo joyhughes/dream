@@ -11,6 +11,7 @@ import {
   SelectionPanel,
   ParametersFromImage,
   AnimationPanel,
+  MixPanel,
 } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
 import { TemplatePicker } from './components/TemplatePicker';
@@ -63,6 +64,7 @@ import type {
   DreamPreset,
   EngineStatus,
   ImageRegularizers,
+  MixIngredient,
   Mode,
   StyleParams,
 } from './types';
@@ -142,6 +144,8 @@ const DEFAULT_STYLE_PARAMS: StyleParams = {
   normalizeBrightness: false,
   patternScale: 1,
   regularizers: NO_REGULARIZERS,
+  templateTurns: 1,
+  mix: [],
 };
 
 const DEFAULT_BRUSH: BrushSettings = {
@@ -175,6 +179,9 @@ function App() {
 
   const [dreamParams, setDreamParams] = useState<DreamParams>(DEFAULT_DREAM_PARAMS);
   const [styleParams, setStyleParams] = useState<StyleParams>(DEFAULT_STYLE_PARAMS);
+  // The image behind each style ingredient in the mix, by ingredient id. Held apart from `styleParams` since
+  // a file cannot travel inside a saved picture; the ingredient itself records which built-in it was.
+  const [mixFiles, setMixFiles] = useState<Record<string, { file: File; url: string }>>({});
 
   const [engineStatus, setEngineStatus] = useState<EngineStatus>({ phase: 'loading-model' });
   const [hasResult, setHasResult] = useState(false);
@@ -356,6 +363,63 @@ function App() {
     }
   }, []);
 
+  const setMixImage = useCallback((id: string, file: File | null) => {
+    setMixFiles((prev) => {
+      const next = { ...prev };
+      if (next[id]) URL.revokeObjectURL(next[id].url);
+      delete next[id];
+      if (file) next[id] = { file, url: URL.createObjectURL(file) };
+      return next;
+    });
+  }, []);
+
+  /**
+   * Puts the images back behind a mix that came out of a saved picture. Built-ins reload by id; an entry
+   * that was the user's own file is left empty, and the run asks for an image for it by name.
+   */
+  const restoreMixImages = useCallback(
+    (mix: MixIngredient[]) => {
+      setMixFiles((prev) => {
+        Object.values(prev).forEach((entry) => URL.revokeObjectURL(entry.url));
+        return {};
+      });
+      for (const ingredient of mix) {
+        if (ingredient.kind !== 'style' || !ingredient.templateId) continue;
+        const template = BUILT_IN_TEMPLATES.find((t) => t.id === ingredient.templateId);
+        if (!template) continue;
+        void template
+          .getFile()
+          .then((file) => setMixImage(ingredient.id, file))
+          .catch((err) => console.warn(`Could not load the "${ingredient.name}" template:`, err));
+      }
+    },
+    [setMixImage],
+  );
+
+  const mixPreviews = useMemo(
+    () => Object.fromEntries(Object.entries(mixFiles).map(([id, entry]) => [id, entry.url])),
+    [mixFiles],
+  );
+
+  /** Every mix style's image as a working-size tensor, for one run. The caller disposes them. */
+  const loadMixImages = useCallback(
+    async (mix: MixIngredient[], workingMax: number): Promise<Map<string, tf.Tensor3D>> => {
+      const images = new Map<string, tf.Tensor3D>();
+      try {
+        for (const ingredient of mix) {
+          const entry = mixFiles[ingredient.id];
+          if (ingredient.kind !== 'style' || !entry) continue;
+          images.set(ingredient.id, imageToWorkingTensor(await loadImageFromFile(entry.file), workingMax));
+        }
+      } catch (err) {
+        images.forEach((image) => image.dispose());
+        throw err;
+      }
+      return images;
+    },
+    [mixFiles],
+  );
+
   const applyOfferedParameters = useCallback(() => {
     const found = offeredParameters;
     if (!found) return;
@@ -364,11 +428,12 @@ function App() {
     setFeatureNetworkId(found.featureNetworkId);
     setDreamParams(found.dream);
     setStyleParams(found.style);
+    restoreMixImages(found.style.mix);
     // Set last, and left as-is if the network's preset list turns out not to contain it: switching networks
     // rebuilds that list asynchronously, and it drops an unknown id on its own.
     setSelectedPresetId(found.presetId);
     setParametersApplied(true);
-  }, [offeredParameters]);
+  }, [offeredParameters, restoreMixImages]);
 
   const handleTemplateFile = useCallback((file: File) => {
     brushTemplateRef.current?.dispose();
@@ -499,9 +564,17 @@ function App() {
     }
 
     if (!brushTemplateRef.current) throw new Error('No style template loaded.');
+    // The mix's dream ingredients come along; its other styles do not, since the brush loads only the main
+    // template and holding every mix image for the length of a painting session is a lot to ask of a phone.
     return runStyleTransfer(patch, brushTemplateRef.current, {
       featureModel: context.featureModel,
-      params: { ...context.styleParams, octaves: 1, stepsPerOctave: steps },
+      params: {
+        ...context.styleParams,
+        octaves: 1,
+        stepsPerOctave: steps,
+        mix: context.styleParams.mix.filter((ingredient) => ingredient.kind === 'dream'),
+      },
+      presets: context.presets,
     });
   }, []);
 
@@ -768,6 +841,7 @@ function App() {
 
     let baseTensor: tf.Tensor3D | null = null;
     let templateTensor: tf.Tensor3D | null = null;
+    let mixImages: Map<string, tf.Tensor3D> | undefined;
     let movieRecorder: MovieRecorder | null = null;
     let videoSource: VideoFrameSource | null = null;
     const processedVideoFrames: ImageBitmap[] = [];
@@ -812,6 +886,8 @@ function App() {
       return runStyleTransfer(inputTensor, templateTensor!, {
         featureModel,
         params: styleParams,
+        mixImages,
+        presets,
         signal: controller.signal,
         pauseController,
         onProgress: async ({ octave, step, image }) => {
@@ -846,6 +922,7 @@ function App() {
       if (mode === 'style') {
         const templateImg = await loadImageFromFile(templateFile!);
         templateTensor = imageToWorkingTensor(templateImg, workingMax);
+        mixImages = await loadMixImages(styleParams.mix, workingMax);
       }
 
       const selection = selectionRef.current;
@@ -1022,6 +1099,7 @@ function App() {
     } finally {
       baseTensor?.dispose();
       templateTensor?.dispose();
+      mixImages?.forEach((image) => image.dispose());
       videoSource?.dispose();
       processedVideoFrames.forEach((bitmap) => bitmap.close());
       releasePooledGpuMemory();
@@ -1051,6 +1129,7 @@ function App() {
     ensureBrush,
     selectionSettings.feather,
     stampParametersAsync,
+    loadMixImages,
   ]);
 
   /**
@@ -1072,9 +1151,10 @@ function App() {
 
     let baseTensor: tf.Tensor3D | null = null;
     let templateTensor: tf.Tensor3D | null = null;
+    let mixImages: Map<string, tf.Tensor3D> | undefined;
     const captured = new CompressedFrameStore();
 
-    const descriptors = animatableFor(mode);
+    const descriptors = animatableFor(mode, styleParams.mix);
     const stepsFor = (frameIndex: number) =>
       mode === 'deepdream'
         ? paramsAtFrame(dreamParams, animation, frameIndex, descriptors)
@@ -1093,6 +1173,8 @@ function App() {
       if (mode === 'style') {
         const templateImg = await loadImageFromFile(templateFile!);
         templateTensor = imageToWorkingTensor(templateImg, workingMax);
+        // Loaded once for the whole sweep: a track can move an ingredient's numbers, but not its image.
+        mixImages = await loadMixImages(styleParams.mix, workingMax);
       }
 
       const baseImg = await loadImageFromFile(baseFile);
@@ -1145,6 +1227,8 @@ function App() {
             : await runStyleTransfer(baseTensor, templateTensor!, {
                 featureModel,
                 params: frameParams as StyleParams,
+                mixImages,
+                presets,
                 signal: controller.signal,
                 pauseController,
                 onProgress: showStep,
@@ -1182,6 +1266,7 @@ function App() {
     } finally {
       baseTensor?.dispose();
       templateTensor?.dispose();
+      mixImages?.forEach((image) => image.dispose());
       captured.clear();
       releasePooledGpuMemory();
       abortControllerRef.current = null;
@@ -1201,6 +1286,7 @@ function App() {
     presets,
     selectedPresetId,
     persistProgressSnapshot,
+    loadMixImages,
   ]);
 
   const handleCancel = useCallback(() => {
@@ -1457,6 +1543,21 @@ function App() {
             />
           </ControlGroup>
 
+          {mode === 'style' && (
+            <ControlGroup title="Mix" defaultOpen={false}>
+              <MixPanel
+                styleParams={styleParams}
+                onStyleParamsChange={setStyleParams}
+                mixPreviews={mixPreviews}
+                onMixImageChange={setMixImage}
+                dreamParams={dreamParams}
+                presets={presets}
+                selectedPresetId={selectedPresetId}
+                isRunning={isRunning}
+              />
+            </ControlGroup>
+          )}
+
           <ControlGroup title="Animation" defaultOpen={false}>
             <AnimationPanel
               mode={mode}
@@ -1466,7 +1567,7 @@ function App() {
               styleParams={styleParams}
               isRunning={isRunning}
               canRender={!!baseFile && !isBaseVideo && !!featureModel && (mode === 'deepdream' || !!templateFile)}
-              summary={describeTracks(animation, animatableFor(mode))}
+              summary={describeTracks(animation, animatableFor(mode, styleParams.mix))}
               onRender={() => void handleRenderAnimation()}
             />
           </ControlGroup>

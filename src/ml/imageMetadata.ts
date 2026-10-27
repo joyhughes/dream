@@ -1,5 +1,5 @@
 import { readPngText, writePngText } from './pngText';
-import type { DreamParams, Mode, StyleParams } from '../types';
+import type { DreamParams, MixIngredient, Mode, StyleParams } from '../types';
 import type { FeatureNetworkId } from './featureModel';
 
 /**
@@ -82,6 +82,53 @@ function readDreamParams(raw: unknown, fallback: DreamParams): DreamParams {
   };
 }
 
+function readString(value: unknown, fallback: string): string {
+  return typeof value === 'string' ? value.slice(0, 200) : fallback;
+}
+
+/**
+ * A saved mix, entry by entry, dropping any entry that is not recognisably one. A style entry's image is
+ * not in the file — only which built-in it was, if it was one — so the app reloads that, and asks for an
+ * image for any that was the user's own.
+ */
+function readMix(raw: unknown): MixIngredient[] {
+  if (!Array.isArray(raw)) return [];
+
+  const mix: MixIngredient[] = [];
+  for (const entry of raw.slice(0, 32)) {
+    const source = readRecord(entry);
+    const id = readString(source.id, '');
+    if (!id || mix.some((existing) => existing.id === id)) continue;
+    const turns = Math.round(readNumber(source.turns, 1, 0, 100));
+
+    if (source.kind === 'style') {
+      mix.push({
+        kind: 'style',
+        id,
+        turns,
+        templateId: typeof source.templateId === 'string' ? source.templateId.slice(0, 200) : null,
+        name: readString(source.name, 'Style'),
+        styleWeight: readNumber(source.styleWeight, 400, 0, 1000000),
+      });
+    } else if (source.kind === 'dream' && typeof source.presetId === 'string') {
+      mix.push({
+        kind: 'dream',
+        id,
+        turns,
+        presetId: source.presetId.slice(0, 200),
+        name: readString(source.name, 'Dream'),
+        stepSize: readNumber(source.stepSize, 0.02, 0, 10),
+        focusSeed: Math.round(readNumber(source.focusSeed, 0, 0, 2 ** 31 - 1)),
+        focusChannels: Math.round(readNumber(source.focusChannels, 8, 1, 4096)),
+        objective: readOneOf(source.objective, ['mean', 'squared'] as const, 'mean'),
+        lapLevels: Math.round(readNumber(source.lapLevels, 1, 1, 12)),
+        tvWeight: readNumber(source.tvWeight, 0, 0, 100),
+      });
+    }
+  }
+  return mix;
+}
+
 function readStyleParams(raw: unknown, fallback: StyleParams): StyleParams {
   const source = readRecord(raw);
   const regularizers = readRecord(source.regularizers);
@@ -105,6 +152,9 @@ function readStyleParams(raw: unknown, fallback: StyleParams): StyleParams {
       blurSigma: readNumber(regularizers.blurSigma, fallback.regularizers.blurSigma, 0, 32),
       blurEvery: Math.round(readNumber(regularizers.blurEvery, fallback.regularizers.blurEvery, 0, 1000)),
     },
+    // As with the dream focus settings: a picture from before the mix existed was the template alone.
+    templateTurns: Math.round(readNumber(source.templateTurns, 1, 0, 100)),
+    mix: readMix(source.mix),
   };
 }
 

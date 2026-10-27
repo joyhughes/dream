@@ -43,12 +43,18 @@ export interface RunDeepDreamOptions {
   pauseController?: PauseController;
 }
 
+/** The settings one ascent step reads. A style run's mix supplies these from a dream ingredient. */
+export type DreamStepParams = Pick<
+  DreamParams,
+  'tileSize' | 'lapLevels' | 'tvWeight' | 'stepSize' | 'colorSpace' | 'focusSeed' | 'focusChannels' | 'objective'
+>;
+
 function computeLoss(
   tile: tf.Tensor3D,
   featureModel: FeatureModel,
   preset: DreamPreset,
   colorSpace: ColorSpace,
-  params: DreamParams,
+  params: DreamStepParams,
 ): tf.Scalar {
   // The tile arrives in whatever space the ascent works in; the network only ever sees RGB. This
   // conversion is inside the tape, so the gradient comes back in the working space's coordinates.
@@ -64,6 +70,44 @@ function computeLoss(
   });
   const total = terms.reduce((acc, t) => acc.add(t) as tf.Scalar, tf.scalar(0));
   return total;
+}
+
+/**
+ * One step of gradient ascent on `current`, which is held in `params.colorSpace`. Returns the stepped image
+ * clamped to that space's range, and leaves `current` for the caller to dispose.
+ */
+export async function dreamAscentStep(
+  current: tf.Tensor3D,
+  featureModel: FeatureModel,
+  preset: DreamPreset,
+  params: DreamStepParams,
+): Promise<tf.Tensor3D> {
+  const { colorSpace } = params;
+  const gradient = await computeTiledGradient(current, params.tileSize, (tile) =>
+    computeLoss(tile, featureModel, preset, colorSpace, params),
+  );
+
+  try {
+    return tf.tidy(() => {
+      // Both terms are normalized to unit standard deviation before they are combined, so `stepSize`
+      // means the same thing regardless of the loss's raw scale and `tvWeight` reads as the share of
+      // the step spent smoothing rather than ascending.
+      const ascent = laplacianNormalize(gradient, params.lapLevels);
+
+      // Total variation is a penalty, so its gradient is subtracted from the direction we ascend in.
+      // It is computed on the whole image rather than per tile: smoothness across a tile boundary is
+      // exactly what a per-tile version would be blind to.
+      const direction =
+        params.tvWeight > 0
+          ? (ascent.sub(laplacianNormalize(totalVariationGradient(current), 1).mul(params.tvWeight)) as tf.Tensor3D)
+          : ascent;
+
+      const stepped = current.add(direction.mul(params.stepSize)) as tf.Tensor3D;
+      return tf.keep(clampToColorSpace(stepped, colorSpace)) as tf.Tensor3D;
+    });
+  } finally {
+    gradient.dispose();
+  }
 }
 
 export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDreamOptions): Promise<tf.Tensor3D> {
@@ -151,29 +195,7 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
         return finish();
       }
 
-      const gradient = await computeTiledGradient(current, params.tileSize, (tile) =>
-        computeLoss(tile, featureModel, preset, colorSpace, params),
-      );
-
-      const updated = tf.tidy(() => {
-        // Both terms are normalized to unit standard deviation before they are combined, so `stepSize`
-        // means the same thing regardless of the loss's raw scale and `tvWeight` reads as the share of
-        // the step spent smoothing rather than ascending.
-        const ascent = laplacianNormalize(gradient, params.lapLevels);
-
-        // Total variation is a penalty, so its gradient is subtracted from the direction we ascend in.
-        // It is computed on the whole image rather than per tile: smoothness across a tile boundary is
-        // exactly what a per-tile version would be blind to.
-        const direction =
-          params.tvWeight > 0
-            ? (ascent.sub(laplacianNormalize(totalVariationGradient(current), 1).mul(params.tvWeight)) as tf.Tensor3D)
-            : ascent;
-
-        const stepped = current.add(direction.mul(params.stepSize)) as tf.Tensor3D;
-        return tf.keep(clampToColorSpace(stepped, colorSpace)) as tf.Tensor3D;
-      });
-      gradient.dispose();
-
+      const updated = await dreamAscentStep(current, featureModel, preset, params);
       current.dispose();
       current = updated;
 

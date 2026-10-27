@@ -97,6 +97,45 @@ export interface StyleParams {
    */
   patternScale: number;
   regularizers: ImageRegularizers;
+  /** Consecutive steps the main template takes each time round the mix. See `MixIngredient`. */
+  templateTurns: number;
+  /** Further styles and tuned DeepDream presets taking turns on the same image. Empty is plain style transfer. */
+  mix: MixIngredient[];
+}
+
+/**
+ * One entry in a style run's mix. A run cycles through the main template and then each ingredient in order,
+ * each taking `turns` consecutive steps on the one shared image before handing it on, and `stepsPerOctave`
+ * counts all of those steps together.
+ */
+export type MixIngredient = MixStyleIngredient | MixDreamIngredient;
+
+interface MixIngredientBase {
+  /** Stable across edits and reorders, so an animation track and a loaded image stay attached to it. */
+  id: string;
+  turns: number;
+}
+
+/** Another style image, matched with its own weight and its own optimizer state. */
+export interface MixStyleIngredient extends MixIngredientBase {
+  kind: 'style';
+  /** The built-in template it uses, or null for the user's own file, which a saved picture cannot carry. */
+  templateId: string | null;
+  name: string;
+  styleWeight: number;
+}
+
+/** A DeepDream preset as it was tuned when added, taking plain ascent steps between the style steps. */
+export interface MixDreamIngredient extends MixIngredientBase {
+  kind: 'dream';
+  presetId: string;
+  name: string;
+  stepSize: number;
+  focusSeed: number;
+  focusChannels: number;
+  objective: DreamObjective;
+  lapLevels: number;
+  tvWeight: number;
 }
 
 /** How the brush lays the effect down. Sizes are in working-image pixels. */

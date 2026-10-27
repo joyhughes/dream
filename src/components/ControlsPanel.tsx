@@ -18,10 +18,13 @@ import type {
   DreamPreset,
   EngineStatus,
   ImageRegularizers,
+  MixIngredient,
   Mode,
   StyleParams,
 } from '../types';
 import { getDeviceLimits } from '../ml/deviceLimits';
+import { TemplatePicker } from './TemplatePicker';
+import { BUILT_IN_TEMPLATES } from '../templates/builtInTemplates';
 
 // Matches the cap `computeTiledGradient` enforces, so the slider can't offer a size that is silently
 // clamped on a phone.
@@ -365,7 +368,7 @@ export function AnimationPanel({
   summary,
   onRender,
 }: AnimationPanelProps) {
-  const descriptors = animatableFor(mode);
+  const descriptors = animatableFor(mode, styleParams.mix);
   const params = mode === 'deepdream' ? dreamParams : styleParams;
 
   const trackFor = (path: string) => settings.tracks.find((track) => track.path === path);
@@ -1245,6 +1248,214 @@ export function ActionsBar({
         {isRecordingMovie && <span className="recording-indicator">● REC</span>}
         {frameProgressLabel && <span className="frame-progress-indicator">{frameProgressLabel}</span>}
         {statusText(status, isPaused)}
+      </p>
+    </div>
+  );
+}
+
+interface MixPanelProps {
+  styleParams: StyleParams;
+  onStyleParamsChange: (params: StyleParams) => void;
+  /** Preview URL of the image behind each style ingredient, by ingredient id. */
+  mixPreviews: Record<string, string>;
+  onMixImageChange: (id: string, file: File | null) => void;
+  /** What "Add DeepDream settings" snapshots: the DeepDream tab as it stands. */
+  dreamParams: DreamParams;
+  presets: DreamPreset[];
+  selectedPresetId: string;
+  isRunning: boolean;
+}
+
+function newIngredientId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+/** "Abstract Objects #7 · 4 ch · sharpened" — enough to tell two tunings of one preset apart in a list. */
+function dreamIngredientName(preset: DreamPreset, params: DreamParams): string {
+  const parts = [params.focusSeed > 0 ? `${preset.name} #${params.focusSeed}` : preset.name];
+  if (params.focusSeed > 0) parts.push(`${params.focusChannels} ch`);
+  if (params.objective === 'squared') parts.push('sharpened');
+  return parts.join(' · ');
+}
+
+/**
+ * Further styles and tuned DeepDream presets, taking turns with the main template on one image.
+ *
+ * A run walks a cycle — the template's turns, then each ingredient's, then round again — one step per turn,
+ * so the image is pulled toward each in rotation and settles where they balance. Turns set that balance;
+ * a style's weight and a dream's step size set how hard each one pulls while it has the image.
+ */
+export function MixPanel({
+  styleParams,
+  onStyleParamsChange,
+  mixPreviews,
+  onMixImageChange,
+  dreamParams,
+  presets,
+  selectedPresetId,
+  isRunning,
+}: MixPanelProps) {
+  const { mix } = styleParams;
+  const update = (id: string, patch: Partial<MixIngredient>) =>
+    onStyleParamsChange({
+      ...styleParams,
+      mix: mix.map((entry) => (entry.id === id ? ({ ...entry, ...patch } as MixIngredient) : entry)),
+    });
+  const remove = (id: string) => {
+    onMixImageChange(id, null);
+    onStyleParamsChange({ ...styleParams, mix: mix.filter((entry) => entry.id !== id) });
+  };
+
+  const addStyle = () =>
+    onStyleParamsChange({
+      ...styleParams,
+      mix: [
+        ...mix,
+        {
+          kind: 'style',
+          id: newIngredientId(),
+          turns: 1,
+          templateId: null,
+          name: `Style ${mix.filter((entry) => entry.kind === 'style').length + 2}`,
+          styleWeight: styleParams.styleWeight,
+        },
+      ],
+    });
+
+  const preset = presets.find((p) => p.id === selectedPresetId);
+  const addDream = () => {
+    if (!preset) return;
+    onStyleParamsChange({
+      ...styleParams,
+      mix: [
+        ...mix,
+        {
+          kind: 'dream',
+          id: newIngredientId(),
+          turns: 1,
+          presetId: preset.id,
+          name: dreamIngredientName(preset, dreamParams),
+          stepSize: dreamParams.stepSize,
+          focusSeed: dreamParams.focusSeed,
+          focusChannels: dreamParams.focusChannels,
+          objective: dreamParams.objective,
+          lapLevels: dreamParams.lapLevels,
+          tvWeight: dreamParams.tvWeight,
+        },
+      ],
+    });
+  };
+
+  const cycle = Math.round(styleParams.templateTurns) + mix.reduce((sum, entry) => sum + Math.round(entry.turns), 0);
+
+  return (
+    <div className="slider-panel">
+      <Slider
+        label="Template turns"
+        value={styleParams.templateTurns}
+        min={0}
+        max={10}
+        step={1}
+        disabled={isRunning}
+        tooltip="How many steps in a row the main template takes each time round the mix. 0 leaves it out of the rotation, so only the mix's own styles and dreams act on the image."
+        onChange={(v) => onStyleParamsChange({ ...styleParams, templateTurns: Math.max(0, Math.round(v)) })}
+      />
+
+      {mix.map((entry) => (
+        <div key={entry.id} className="mix-ingredient">
+          {entry.kind === 'style' ? (
+            <>
+              <TemplatePicker
+                label={entry.name}
+                selectedId={entry.templateId}
+                previewUrl={mixPreviews[entry.id]}
+                disabled={isRunning}
+                onSelectBuiltIn={(id, file) => {
+                  const name = BUILT_IN_TEMPLATES.find((t) => t.id === id)?.name ?? entry.name;
+                  update(entry.id, { templateId: id, name });
+                  onMixImageChange(entry.id, file);
+                }}
+                onSelectFile={(file) => {
+                  update(entry.id, { templateId: null, name: file.name.replace(/\.[^.]+$/, '') || entry.name });
+                  onMixImageChange(entry.id, file);
+                }}
+              />
+              <Slider
+                label="Style weight"
+                value={entry.styleWeight}
+                min={1}
+                max={2000}
+                step={10}
+                disabled={isRunning}
+                tooltip="How strongly this style pulls the image toward its own colors and textures during its turns. It has its own weight, so one style can whisper while another shouts."
+                onChange={(v) => update(entry.id, { styleWeight: v })}
+              />
+            </>
+          ) : (
+            <>
+              <span className="dropzone-label">{entry.name}</span>
+              <Slider
+                label="Step size"
+                value={entry.stepSize}
+                min={0.005}
+                max={0.1}
+                step={0.005}
+                disabled={isRunning}
+                tooltip="How far each of this dream's turns pushes the image toward what its preset sees. The styles push back on their own turns, so this is the balance between creatures growing and being painted over."
+                onChange={(v) => update(entry.id, { stepSize: v })}
+              />
+              <Slider
+                label="Variation"
+                value={entry.focusSeed}
+                min={0}
+                max={999}
+                step={1}
+                disabled={isRunning}
+                tooltip="Which set of feature detectors this dream amplifies, as on the DeepDream tab. 0 is the whole layer."
+                onChange={(v) => update(entry.id, { focusSeed: Math.max(0, Math.round(v)) })}
+              />
+            </>
+          )}
+          <Slider
+            label="Turns"
+            value={entry.turns}
+            min={0}
+            max={10}
+            step={1}
+            disabled={isRunning}
+            tooltip="How many steps in a row this takes each time round the mix. 0 sits it out without removing it."
+            onChange={(v) => update(entry.id, { turns: Math.max(0, Math.round(v)) })}
+          />
+          <div className="controls-actions">
+            <button className="btn btn--secondary" onClick={() => remove(entry.id)} disabled={isRunning}>
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+
+      <div className="controls-actions">
+        <button
+          className="btn btn--secondary"
+          onClick={addStyle}
+          disabled={isRunning}
+          title="Adds another style image to the rotation, with its own weight."
+        >
+          Add style
+        </button>
+        <button
+          className="btn btn--secondary"
+          onClick={addDream}
+          disabled={isRunning || !preset}
+          title="Adds the DeepDream tab's preset, exactly as tuned there — variation, focus channels, objective and step size — to the rotation. Tune another on the DeepDream tab and add it too."
+        >
+          Add DeepDream settings
+        </button>
+      </div>
+      <p className="field-hint">
+        {mix.length === 0
+          ? 'Plain style transfer. Add styles or tuned DeepDream presets to take turns with the template.'
+          : `Each cycle is ${cycle} step${cycle === 1 ? '' : 's'}; Steps per octave counts them all. The brush uses the template and the dreams, not the extra styles.`}
       </p>
     </div>
   );

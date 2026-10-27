@@ -614,6 +614,16 @@ body {
   gap: 0.6rem;
 }
 
+/* One entry in a style run's mix: boxed, so its sliders read as belonging to it and not to the next. */
+.mix-ingredient {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 0.75rem;
+  border: 1px solid #34363f;
+  border-radius: 8px;
+}
+
 .controls-actions {
   display: flex;
   flex-wrap: wrap;

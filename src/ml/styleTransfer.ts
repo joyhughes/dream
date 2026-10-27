@@ -16,8 +16,9 @@ import {
   toRgb,
   withRgbView,
 } from './colorSpace';
+import { dreamAscentStep } from './deepdream';
 import type { PauseController } from './pauseController';
-import type { StyleParams } from '../types';
+import type { DreamPreset, MixDreamIngredient, StyleParams } from '../types';
 
 export interface StyleTransferProgress {
   octave: number;
@@ -33,6 +34,24 @@ export interface RunStyleTransferOptions {
   onProgress?: (progress: StyleTransferProgress) => void | Promise<void>;
   signal?: AbortSignal;
   pauseController?: PauseController;
+  /** The image for each style ingredient in `params.mix`, by ingredient id, already at working size. */
+  mixImages?: Map<string, tf.Tensor3D>;
+  /** The presets dream ingredients in `params.mix` name. */
+  presets?: DreamPreset[];
+}
+
+/** A style the mix matches against: its targets, its weight, and an optimizer whose momentum is its own. */
+interface StyleTurn {
+  kind: 'style';
+  gramTargets: tf.Tensor2D[];
+  styleWeight: number;
+  optimizer: tf.AdamOptimizer;
+}
+
+interface DreamTurn {
+  kind: 'dream';
+  ingredient: MixDreamIngredient;
+  preset: DreamPreset;
 }
 
 const STYLE_LAYER_FRACTIONS = [0.05, 0.2, 0.4, 0.6, 0.8];
@@ -276,7 +295,7 @@ export async function runStyleTransfer(
   styleImage: tf.Tensor3D,
   options: RunStyleTransferOptions,
 ): Promise<tf.Tensor3D> {
-  const { featureModel, params, onProgress, signal, pauseController } = options;
+  const { featureModel, params, onProgress, signal, pauseController, mixImages, presets = [] } = options;
 
   const sorted = [...featureModel.layers].sort((a, b) => a.depthIndex - b.depthIndex);
   const byName = new Map(sorted.map((layer) => [layer.nodeName, layer]));
@@ -300,8 +319,47 @@ export async function runStyleTransfer(
     }
   }
 
-  // Style statistics don't depend on octave resolution, so these are computed once up front.
-  const styleGramTargets = computeStyleGramTargets(featureModel, styleImage, styleLayers, params.tileSize);
+  // Resolved before anything is allocated, so a mix that cannot run says so without leaving tensors behind.
+  for (const ingredient of params.mix) {
+    if (ingredient.kind === 'style' && !mixImages?.get(ingredient.id)) {
+      throw new Error(`Pick an image for "${ingredient.name}" in the mix, or remove it.`);
+    }
+    if (ingredient.kind === 'dream' && !presets.some((p) => p.id === ingredient.presetId)) {
+      throw new Error(`The preset for "${ingredient.name}" in the mix is not available with this network.`);
+    }
+  }
+
+  // Style statistics don't depend on octave resolution, so these are computed once up front — for the
+  // main template and for every style in the mix.
+  const styleTurns: StyleTurn[] = [];
+  const addStyle = (image: tf.Tensor3D, styleWeight: number): StyleTurn => {
+    const turn: StyleTurn = {
+      kind: 'style',
+      gramTargets: computeStyleGramTargets(featureModel, image, styleLayers, params.tileSize),
+      styleWeight,
+      optimizer: tf.train.adam(params.learningRate),
+    };
+    styleTurns.push(turn);
+    return turn;
+  };
+
+  // The cycle the run walks through, one entry per step: the main template's turns, then each ingredient's.
+  // An ingredient at zero turns sits out, which is what lets an animation fade one in or out.
+  const schedule: (StyleTurn | DreamTurn)[] = [];
+  const templateTurn = addStyle(styleImage, params.styleWeight);
+  for (let i = 0; i < Math.round(params.templateTurns); i++) schedule.push(templateTurn);
+  for (const ingredient of params.mix) {
+    const turns = Math.max(0, Math.round(ingredient.turns));
+    if (turns === 0) continue;
+    const entry: StyleTurn | DreamTurn =
+      ingredient.kind === 'style'
+        ? addStyle(mixImages!.get(ingredient.id)!, ingredient.styleWeight)
+        : { kind: 'dream', ingredient, preset: presets.find((p) => p.id === ingredient.presetId)! };
+    for (let i = 0; i < turns; i++) schedule.push(entry);
+  }
+  // Everything at zero turns would be a run that does nothing; the template is the honest fallback.
+  if (schedule.length === 0) schedule.push(templateTurn);
+  let scheduleIndex = 0;
 
   const [h, w] = contentImage.shape;
 
@@ -337,7 +395,6 @@ export async function runStyleTransfer(
   let generated = asVariable(
     tf.tidy(() => fromRgb(tf.image.resizeBilinear(contentImage, shapes[0]) as tf.Tensor3D, params.colorSpace)),
   );
-  let optimizer = tf.train.adam(params.learningRate);
   let contentImageAtOctave = tf.tidy(
     () => tf.keep(tf.image.resizeBilinear(contentImage, shapes[0])) as tf.Tensor3D,
   );
@@ -362,8 +419,10 @@ export async function runStyleTransfer(
 
         // Adam's momentum accumulators are keyed by variable name, not identity — since `generated` is
         // recreated at each octave's resolution, a fresh optimizer avoids reusing wrong-shaped moment tensors.
-        optimizer.dispose();
-        optimizer = tf.train.adam(params.learningRate);
+        for (const turn of styleTurns) {
+          turn.optimizer.dispose();
+          turn.optimizer = tf.train.adam(params.learningRate);
+        }
 
         contentImageAtOctave.dispose();
         contentImageAtOctave = tf.tidy(
@@ -383,16 +442,37 @@ export async function runStyleTransfer(
           break octaveLoop;
         }
 
-        await optimizeStep(
-          generated,
-          optimizer,
-          featureModel,
-          contentLayer,
-          styleLayers,
-          contentImageAtOctave,
-          styleGramTargets,
-          params,
-        );
+        const turn = schedule[scheduleIndex % schedule.length];
+        scheduleIndex++;
+
+        if (turn.kind === 'style') {
+          await optimizeStep(
+            generated,
+            turn.optimizer,
+            featureModel,
+            contentLayer,
+            styleLayers,
+            contentImageAtOctave,
+            turn.gramTargets,
+            { ...params, styleWeight: turn.styleWeight },
+          );
+        } else {
+          // A plain ascent step written straight into the variable. Adam's moments carry on across it, so the
+          // next style step sees the change as something to answer rather than a reset.
+          const { ingredient } = turn;
+          const dreamed = await dreamAscentStep(generated as unknown as tf.Tensor3D, featureModel, turn.preset, {
+            tileSize: params.tileSize,
+            colorSpace: params.colorSpace,
+            lapLevels: ingredient.lapLevels,
+            tvWeight: ingredient.tvWeight,
+            stepSize: ingredient.stepSize,
+            focusSeed: ingredient.focusSeed,
+            focusChannels: ingredient.focusChannels,
+            objective: ingredient.objective,
+          });
+          generated.assign(dreamed);
+          dreamed.dispose();
+        }
 
         // Image-space regularizers act on the variable in place. Adam's moment estimates are keyed by
         // variable name and survive the assignment, so its momentum carries across the change rather
@@ -472,7 +552,9 @@ export async function runStyleTransfer(
     contentImageAtOctave.dispose();
     targetSaturation?.dispose();
     targetBrightness?.dispose();
-    styleGramTargets.forEach((g) => g.dispose());
-    optimizer.dispose();
+    for (const turn of styleTurns) {
+      turn.gramTargets.forEach((g) => g.dispose());
+      turn.optimizer.dispose();
+    }
   }
 }

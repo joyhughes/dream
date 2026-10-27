@@ -1,5 +1,5 @@
 import { getDeviceLimits } from './deviceLimits';
-import type { DreamParams, Mode, StyleParams } from '../types';
+import type { DreamParams, MixIngredient, Mode, StyleParams } from '../types';
 
 /**
  * Sweeping a parameter across a range and keeping every frame.
@@ -59,10 +59,36 @@ export const STYLE_ANIMATABLE: AnimatableParam[] = [
   { path: 'regularizers.blurSigma', label: 'Blur strength', min: 0, max: 2, step: 0.1 },
   { path: 'regularizers.blurEvery', label: 'Blur every N steps', min: 0, max: 20, step: 1, integer: true },
   { path: 'regularizers.l2Decay', label: 'L2 decay', min: 0, max: 0.1, step: 0.005 },
+  { path: 'templateTurns', label: 'Template turns', min: 0, max: 10, step: 1, integer: true },
 ];
 
-export function animatableFor(mode: Mode): AnimatableParam[] {
-  return mode === 'deepdream' ? DREAM_ANIMATABLE : STYLE_ANIMATABLE;
+/**
+ * The tracks a style run's mix adds: every number on every ingredient, under `mix.<id>.<field>`. Keyed by
+ * id rather than position, so a track keeps following its ingredient when another is removed — and a track
+ * whose ingredient is gone simply finds no descriptor and is skipped.
+ */
+function mixAnimatable(mix: MixIngredient[]): AnimatableParam[] {
+  return mix.flatMap((ingredient): AnimatableParam[] => {
+    const at = (field: string) => `mix.${ingredient.id}.${field}`;
+    const turns = { path: at('turns'), label: `${ingredient.name}: turns`, min: 0, max: 10, step: 1, integer: true };
+
+    if (ingredient.kind === 'style') {
+      return [
+        { path: at('styleWeight'), label: `${ingredient.name}: style weight`, min: 1, max: 2000, step: 10 },
+        turns,
+      ];
+    }
+    return [
+      { path: at('stepSize'), label: `${ingredient.name}: step size`, min: 0.005, max: 0.1, step: 0.005 },
+      { path: at('focusSeed'), label: `${ingredient.name}: variation`, min: 0, max: 999, step: 1, integer: true },
+      { path: at('focusChannels'), label: `${ingredient.name}: focus channels`, min: 1, max: 64, step: 1, integer: true },
+      turns,
+    ];
+  });
+}
+
+export function animatableFor(mode: Mode, mix: MixIngredient[] = []): AnimatableParam[] {
+  return mode === 'deepdream' ? DREAM_ANIMATABLE : [...STYLE_ANIMATABLE, ...mixAnimatable(mix)];
 }
 
 /**
@@ -115,8 +141,18 @@ export const DEFAULT_ANIMATION: AnimationSettings = {
 
 type ParamsLike = DreamParams | StyleParams;
 
+function mixOf(params: ParamsLike): MixIngredient[] {
+  return 'mix' in params ? params.mix : [];
+}
+
 export function readParam(params: ParamsLike, path: string): number {
-  const [head, tail] = path.split('.');
+  const [head, tail, field] = path.split('.');
+  if (head === 'mix') {
+    const ingredient = mixOf(params).find((entry) => entry.id === tail) as unknown as Record<string, unknown> | undefined;
+    const value = ingredient?.[field];
+    return typeof value === 'number' ? value : 0;
+  }
+
   const source = params as unknown as Record<string, unknown>;
   const value = tail ? (source[head] as Record<string, unknown> | undefined)?.[tail] : source[head];
   return typeof value === 'number' ? value : 0;
@@ -124,7 +160,12 @@ export function readParam(params: ParamsLike, path: string): number {
 
 /** A copy with one value replaced. Nested paths rebuild only the branch they touch. */
 export function withParam<T extends ParamsLike>(params: T, path: string, value: number): T {
-  const [head, tail] = path.split('.');
+  const [head, tail, field] = path.split('.');
+  if (head === 'mix') {
+    const mix = mixOf(params).map((entry) => (entry.id === tail ? { ...entry, [field]: value } : entry));
+    return { ...params, mix };
+  }
+
   if (!tail) {
     return { ...params, [head]: value };
   }

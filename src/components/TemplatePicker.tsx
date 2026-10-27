@@ -8,6 +8,8 @@ interface TemplatePickerProps {
   selectedId: string | null;
   previewUrl?: string;
   disabled?: boolean;
+  /** Heading over the trigger. Each style in a mix has its own picker, and its own name. */
+  label?: string;
   onSelectBuiltIn: (id: string, file: File) => void;
   onSelectFile: (file: File) => void;
 }
@@ -48,6 +50,7 @@ export function TemplatePicker({
   selectedId,
   previewUrl,
   disabled,
+  label = 'Dream template (style)',
   onSelectBuiltIn,
   onSelectFile,
 }: TemplatePickerProps) {
@@ -183,7 +186,7 @@ export function TemplatePicker({
 
   return (
     <div className="dropzone-wrapper">
-      <span className="dropzone-label">Dream template (style)</span>
+      <span className="dropzone-label">{label}</span>
       <div
         ref={triggerRef}
         // Hover only opens it for a real mouse. iOS synthesizes hover from a tap, which used to open the
