@@ -14,7 +14,7 @@ import {
 } from './components/ControlsPanel';
 import { ResultCanvas } from './components/ResultCanvas';
 import { TemplatePicker } from './components/TemplatePicker';
-import { initializeML, ensureBackendHealthy } from './ml/tfSetup';
+import { initializeML, ensureBackendHealthy, releasePooledGpuMemory } from './ml/tfSetup';
 import { loadFeatureModel } from './ml/featureModels';
 import type { FeatureModel, FeatureNetworkId } from './ml/featureModel';
 import { buildPresets } from './ml/presets';
@@ -1021,6 +1021,7 @@ function App() {
       templateTensor?.dispose();
       videoSource?.dispose();
       processedVideoFrames.forEach((bitmap) => bitmap.close());
+      releasePooledGpuMemory();
       abortControllerRef.current = null;
       pauseControllerRef.current = null;
       setIsPaused(false);
@@ -1153,6 +1154,9 @@ function App() {
           }
         } finally {
           result.dispose();
+          // A frame that moved a size-setting track leaves its whole working set pooled under sizes the next
+          // frame won't ask for. See `releasePooledGpuMemory`.
+          releasePooledGpuMemory();
         }
       }
 
@@ -1176,6 +1180,7 @@ function App() {
       baseTensor?.dispose();
       templateTensor?.dispose();
       captured.clear();
+      releasePooledGpuMemory();
       abortControllerRef.current = null;
       pauseControllerRef.current = null;
       setIsPaused(false);
