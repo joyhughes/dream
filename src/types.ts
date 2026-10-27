@@ -55,7 +55,23 @@ export interface DreamParams {
    */
   patternScale: number;
   regularizers: ImageRegularizers;
+  /**
+   * Which handful of each target layer's channels to amplify. 0 amplifies the whole layer, the classic
+   * effect; any other number names one reproducible handful. See `ml/channelFocus`.
+   */
+  focusSeed: number;
+  /** How many channels a nonzero `focusSeed` picks per layer. Fewer gives purer, stranger forms. */
+  focusChannels: number;
+  /** How activations are scored. See `DreamObjective`. */
+  objective: DreamObjective;
 }
+
+/**
+ * `mean` rewards every activation equally, so the ascent spreads its effort across the whole layer.
+ * `squared` rewards strong activations disproportionately, so whatever the network already half-sees gets
+ * pushed hardest — fewer, bolder, more fully formed shapes in place of an even carpet of them.
+ */
+export type DreamObjective = 'mean' | 'squared';
 
 export interface StyleParams {
   contentWeight: number;

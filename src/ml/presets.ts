@@ -17,6 +17,7 @@ const PRESET_SPECS: PresetSpec[] = [
   { id: 'organic-forms', name: 'Organic Forms', description: 'Mid layers: swirling, organic, wave-like forms.', depthFraction: 0.52, span: 2 },
   { id: 'structures', name: 'Complex Structures', description: 'Mid-high layers: architectural and compound shapes.', depthFraction: 0.72, span: 2 },
   { id: 'abstract', name: 'Abstract Objects', description: 'Late layers: high-level, abstract, object-like forms.', depthFraction: 0.9, span: 2 },
+  { id: 'deepest', name: 'Deepest Layer', description: 'The last layer alone: the most fully formed objects, and the most to gain from a variation.', depthFraction: 1, span: 1 },
 ];
 
 /** Builds the DeepDream preset list from whatever activation layers were actually discovered in the loaded model. */

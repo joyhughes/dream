@@ -122,6 +122,9 @@ const DEFAULT_DREAM_PARAMS: DreamParams = {
   normalizeBrightness: false,
   patternScale: 1,
   regularizers: NO_REGULARIZERS,
+  focusSeed: 0,
+  focusChannels: 8,
+  objective: 'mean',
 };
 
 const DEFAULT_STYLE_PARAMS: StyleParams = {
@@ -1437,6 +1440,8 @@ function App() {
               presets={presets}
               selectedPresetId={selectedPresetId}
               onPresetChange={setSelectedPresetId}
+              dreamParams={dreamParams}
+              onDreamParamsChange={setDreamParams}
               isRunning={isRunning}
             />
           </ControlGroup>

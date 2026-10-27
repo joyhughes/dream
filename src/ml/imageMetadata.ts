@@ -74,6 +74,11 @@ function readDreamParams(raw: unknown, fallback: DreamParams): DreamParams {
       blurSigma: readNumber(regularizers.blurSigma, fallback.regularizers.blurSigma, 0, 32),
       blurEvery: Math.round(readNumber(regularizers.blurEvery, fallback.regularizers.blurEvery, 0, 1000)),
     },
+    // A picture saved before these existed was made from the whole layer with the plain mean, so a missing
+    // value means that rather than whatever happens to be set now — otherwise it would not reproduce.
+    focusSeed: Math.round(readNumber(source.focusSeed, 0, 0, 2 ** 31 - 1)),
+    focusChannels: Math.round(readNumber(source.focusChannels, fallback.focusChannels, 1, 4096)),
+    objective: readOneOf(source.objective, ['mean', 'squared'] as const, 'mean'),
   };
 }
 

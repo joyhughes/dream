@@ -21,6 +21,7 @@ import {
   toRgb,
   withRgbView,
 } from './colorSpace';
+import { focusedChannels } from './channelFocus';
 import type { PauseController } from './pauseController';
 import type { ColorSpace, DreamParams, DreamPreset } from '../types';
 
@@ -47,6 +48,7 @@ function computeLoss(
   featureModel: FeatureModel,
   preset: DreamPreset,
   colorSpace: ColorSpace,
+  params: DreamParams,
 ): tf.Scalar {
   // The tile arrives in whatever space the ascent works in; the network only ever sees RGB. This
   // conversion is inside the tape, so the gradient comes back in the working space's coordinates.
@@ -54,7 +56,12 @@ function computeLoss(
   const nodeNames = preset.layers.map((l) => l.nodeName);
   const activations = featureModel.activations(batched, nodeNames);
 
-  const terms = activations.map((act, i) => act.mean().mul(preset.layers[i].weight) as tf.Scalar);
+  const terms = activations.map((act, i) => {
+    const channels = focusedChannels(nodeNames[i], act.shape[act.rank - 1], params.focusSeed, params.focusChannels);
+    const focused = channels ? tf.gather(act, tf.tensor1d(channels, 'int32'), act.rank - 1) : act;
+    const scored = params.objective === 'squared' ? focused.square() : focused;
+    return scored.mean().mul(preset.layers[i].weight) as tf.Scalar;
+  });
   const total = terms.reduce((acc, t) => acc.add(t) as tf.Scalar, tf.scalar(0));
   return total;
 }
@@ -145,7 +152,7 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
       }
 
       const gradient = await computeTiledGradient(current, params.tileSize, (tile) =>
-        computeLoss(tile, featureModel, preset, colorSpace),
+        computeLoss(tile, featureModel, preset, colorSpace, params),
       );
 
       const updated = tf.tidy(() => {

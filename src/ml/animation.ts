@@ -39,6 +39,10 @@ export const DREAM_ANIMATABLE: AnimatableParam[] = [
   { path: 'regularizers.blurSigma', label: 'Blur strength', min: 0, max: 2, step: 0.1 },
   { path: 'regularizers.blurEvery', label: 'Blur every N steps', min: 0, max: 20, step: 1, integer: true },
   { path: 'regularizers.l2Decay', label: 'L2 decay', min: 0, max: 0.1, step: 0.005 },
+  // A sweep of the variation is a contact sheet rather than a motion: each frame is its own set of channels,
+  // so rendering 1 to 24 shows twenty-four different families of forms side by side in time.
+  { path: 'focusSeed', label: 'Variation', min: 0, max: 999, step: 1, integer: true },
+  { path: 'focusChannels', label: 'Focus channels', min: 1, max: 64, step: 1, integer: true },
 ];
 
 export const STYLE_ANIMATABLE: AnimatableParam[] = [

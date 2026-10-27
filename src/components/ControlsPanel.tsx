@@ -13,6 +13,7 @@ import type {
   ColorSpace,
   SelectionSettings,
   ToolId,
+  DreamObjective,
   DreamParams,
   DreamPreset,
   EngineStatus,
@@ -206,11 +207,30 @@ interface PresetPanelProps {
   presets: DreamPreset[];
   selectedPresetId: string;
   onPresetChange: (id: string) => void;
+  dreamParams: DreamParams;
+  onDreamParamsChange: (params: DreamParams) => void;
   isRunning: boolean;
 }
 
-export function PresetPanel({ mode, presets, selectedPresetId, onPresetChange, isRunning }: PresetPanelProps) {
+/** A fresh variation that is never 0, since 0 means the whole layer rather than a variation of it. */
+function rollVariation(current: number): number {
+  let next = current;
+  while (next === current) next = 1 + Math.floor(Math.random() * 999);
+  return next;
+}
+
+export function PresetPanel({
+  mode,
+  presets,
+  selectedPresetId,
+  onPresetChange,
+  dreamParams,
+  onDreamParamsChange,
+  isRunning,
+}: PresetPanelProps) {
   if (mode !== 'deepdream') return null;
+
+  const focused = dreamParams.focusSeed > 0;
 
   return (
     <div className="preset-panel">
@@ -228,6 +248,61 @@ export function PresetPanel({ mode, presets, selectedPresetId, onPresetChange, i
         </select>
       </label>
       <p className="field-hint">{presets.find((p) => p.id === selectedPresetId)?.description}</p>
+
+      <Slider
+        label="Variation"
+        value={dreamParams.focusSeed}
+        min={0}
+        max={999}
+        step={1}
+        disabled={isRunning}
+        tooltip="Which of the layer's feature detectors to amplify. 0 amplifies all of them at once, which averages their ideas into the familiar blend. Any other number picks a small, fixed set of them, and each set has its own family of creatures and objects — the same number always gives the same set, so a good one can be typed back in later. Strongest on the late-layer presets."
+        onChange={(v) => onDreamParamsChange({ ...dreamParams, focusSeed: Math.max(0, Math.round(v)) })}
+      />
+      <div className="controls-actions">
+        <button
+          className="btn btn--secondary"
+          onClick={() => onDreamParamsChange({ ...dreamParams, focusSeed: rollVariation(dreamParams.focusSeed) })}
+          disabled={isRunning}
+          title="Picks a different variation at random. Generate again to see what it draws."
+        >
+          Roll variation
+        </button>
+        <button
+          className="btn btn--secondary"
+          onClick={() => onDreamParamsChange({ ...dreamParams, focusSeed: 0 })}
+          disabled={isRunning || !focused}
+          title="Goes back to amplifying the whole layer."
+        >
+          Whole layer
+        </button>
+      </div>
+      {focused && (
+        <Slider
+          label="Focus channels"
+          value={dreamParams.focusChannels}
+          min={1}
+          max={64}
+          step={1}
+          disabled={isRunning}
+          tooltip="How many feature detectors a variation amplifies. One or two give the purest and strangest forms; more mix them toward the whole-layer look. Raising this keeps the detectors already chosen and adds to them, so the variation fills out rather than changing."
+          onChange={(v) => onDreamParamsChange({ ...dreamParams, focusChannels: Math.max(1, Math.round(v)) })}
+        />
+      )}
+      <label
+        className="field-row"
+        title="How the network's response is scored. Average rewards every response equally and spreads detail evenly. Sharpened rewards the strongest responses most, so whatever the network half-sees is pushed hardest: fewer, bolder, more fully formed shapes."
+      >
+        <span>Objective</span>
+        <select
+          value={dreamParams.objective}
+          onChange={(e) => onDreamParamsChange({ ...dreamParams, objective: e.target.value as DreamObjective })}
+          disabled={isRunning}
+        >
+          <option value="mean">Average</option>
+          <option value="squared">Sharpened</option>
+        </select>
+      </label>
     </div>
   );
 }
