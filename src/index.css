@@ -614,6 +614,40 @@ body {
   gap: 0.6rem;
 }
 
+/* Which kind of entry a mix ingredient is, and its name, at the top of its box. */
+.mix-ingredient-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.mix-ingredient-kind {
+  flex: none;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: #34363f;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mix-ingredient-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A preset blended into another, with its weight: grouped so the weight reads as belonging to it. */
+.preset-blend-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid #34363f;
+}
+
 /* One entry in a style run's mix: boxed, so its sliders read as belonging to it and not to the next. */
 .mix-ingredient {
   display: flex;

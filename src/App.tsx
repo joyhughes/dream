@@ -19,8 +19,7 @@ import { initializeML, ensureBackendHealthy, releasePooledGpuMemory } from './ml
 import { loadFeatureModel } from './ml/featureModels';
 import type { FeatureModel, FeatureNetworkId } from './ml/featureModel';
 import { buildPresets } from './ml/presets';
-import { runDeepDream } from './ml/deepdream';
-import { runStyleTransfer } from './ml/styleTransfer';
+import { runDreamWithMix, runStyleTransfer } from './ml/styleTransfer';
 import { imageToWorkingTensor, loadImageFromFile, renderTensorToCanvas, workingDimensions } from './ml/imageUtils';
 import { getDeviceLimits, maxFramesInStore } from './ml/deviceLimits';
 import { CompressedFrameStore } from './ml/frameStore';
@@ -126,7 +125,13 @@ const DEFAULT_DREAM_PARAMS: DreamParams = {
   regularizers: NO_REGULARIZERS,
   focusSeed: 0,
   focusChannels: 8,
+  morphSeed: 0,
+  morph: 0,
+  mainTurns: 1,
+  mix: [],
   objective: 'mean',
+  presetWeight: 1,
+  presetBlend: [],
 };
 
 const DEFAULT_STYLE_PARAMS: StyleParams = {
@@ -428,7 +433,7 @@ function App() {
     setFeatureNetworkId(found.featureNetworkId);
     setDreamParams(found.dream);
     setStyleParams(found.style);
-    restoreMixImages(found.style.mix);
+    restoreMixImages([...found.dream.mix, ...found.style.mix]);
     // Set last, and left as-is if the network's preset list turns out not to contain it: switching networks
     // rebuilds that list asynchronously, and it drops an unknown id on its own.
     setSelectedPresetId(found.presetId);
@@ -554,28 +559,40 @@ function App() {
     // drawn directly. An octave pyramid inside a dab would spread detail across scales the user did not ask
     // for, and cost several passes per tick where the budget is one frame.
     if (context.mode === 'deepdream') {
-      const preset = context.presets.find((p) => p.id === context.selectedPresetId);
-      if (!preset) throw new Error('No preset selected.');
-      return runDeepDream(patch, {
+      // As for style below: the mix's dreams come along, its styles do not.
+      return runDreamWithMix(patch, {
         featureModel: context.featureModel,
-        preset,
-        params: { ...context.dreamParams, octaves: 1, stepsPerOctave: steps },
+        params: {
+          ...context.dreamParams,
+          octaves: 1,
+          stepsPerOctave: steps,
+          mix: context.dreamParams.mix.filter((ingredient) => ingredient.kind === 'dream'),
+        },
+        presetId: context.selectedPresetId,
+        presets: context.presets,
       });
     }
 
     if (!brushTemplateRef.current) throw new Error('No style template loaded.');
+    // A clone shares the template's data and keeps it alive by count: switching tools or templates mid-dab
+    // replaces and disposes the ref's tensor, and without its own hold this dab would be left reading it.
+    const template = brushTemplateRef.current.clone();
     // The mix's dream ingredients come along; its other styles do not, since the brush loads only the main
     // template and holding every mix image for the length of a painting session is a lot to ask of a phone.
-    return runStyleTransfer(patch, brushTemplateRef.current, {
+    try {
+      return await runStyleTransfer(patch, template, {
       featureModel: context.featureModel,
-      params: {
-        ...context.styleParams,
-        octaves: 1,
-        stepsPerOctave: steps,
-        mix: context.styleParams.mix.filter((ingredient) => ingredient.kind === 'dream'),
-      },
-      presets: context.presets,
-    });
+        params: {
+          ...context.styleParams,
+          octaves: 1,
+          stepsPerOctave: steps,
+          mix: context.styleParams.mix.filter((ingredient) => ingredient.kind === 'dream'),
+        },
+        presets: context.presets,
+      });
+    } finally {
+      template.dispose();
+    }
   }, []);
 
   /**
@@ -602,6 +619,8 @@ function App() {
             ? selection.feathered(selectionSettingsRef.current.feather)
             : undefined;
         await brush.dab(point.x, point.y, brushSettingsRef.current, processBrushPatch, restrictTo);
+        // Thrown away mid-dab (a new photo, say): whatever replaced it owns the canvas now.
+        if (brush.isDisposed) break;
         if (canvasRef.current) {
           await renderTensorToCanvas(brush.current, canvasRef.current);
         }
@@ -696,7 +715,7 @@ function App() {
         mask.dispose();
       }
 
-      if (canvasRef.current) {
+      if (canvasRef.current && !brush.isDisposed) {
         await renderTensorToCanvas(brush.current, canvasRef.current);
         canvasRef.current.toBlob((blob) => {
           if (!blob) return;
@@ -831,7 +850,8 @@ function App() {
     !!featureModel;
 
   const handleGenerate = useCallback(async () => {
-    if (!baseFile || !featureModel) return;
+    // A run ends by handing its result to the brush, which would pull the image out from under a dab.
+    if (!baseFile || !featureModel || paintingRef.current) return;
     if (mode === 'style' && !templateFile) return;
 
     const controller = new AbortController();
@@ -865,13 +885,12 @@ function App() {
       renderPreview: (image: tf.Tensor3D) => Promise<void> = drawFullPreview,
     ): Promise<tf.Tensor3D> => {
       if (mode === 'deepdream') {
-        const preset = presets.find((p) => p.id === selectedPresetId);
-        if (!preset) throw new Error('No preset selected.');
-
-        return runDeepDream(inputTensor, {
+        return runDreamWithMix(inputTensor, {
           featureModel,
-          preset,
           params: dreamParams,
+          presetId: selectedPresetId,
+          presets,
+          mixImages,
           signal: controller.signal,
           pauseController,
           onProgress: async ({ octave, step, image }) => {
@@ -922,8 +941,8 @@ function App() {
       if (mode === 'style') {
         const templateImg = await loadImageFromFile(templateFile!);
         templateTensor = imageToWorkingTensor(templateImg, workingMax);
-        mixImages = await loadMixImages(styleParams.mix, workingMax);
       }
+      mixImages = await loadMixImages(mode === 'style' ? styleParams.mix : dreamParams.mix, workingMax);
 
       const selection = selectionRef.current;
       const bounds =
@@ -1141,7 +1160,7 @@ function App() {
    * memory budget that caps a video's length caps this too.
    */
   const handleRenderAnimation = useCallback(async () => {
-    if (!baseFile || isBaseVideo || !featureModel || animation.tracks.length === 0) return;
+    if (!baseFile || isBaseVideo || !featureModel || animation.tracks.length === 0 || paintingRef.current) return;
     if (mode === 'style' && !templateFile) return;
 
     const controller = new AbortController();
@@ -1152,9 +1171,11 @@ function App() {
     let baseTensor: tf.Tensor3D | null = null;
     let templateTensor: tf.Tensor3D | null = null;
     let mixImages: Map<string, tf.Tensor3D> | undefined;
+    // The last frame's result, kept only when frames feed into each other.
+    let previous: tf.Tensor3D | null = null;
     const captured = new CompressedFrameStore();
 
-    const descriptors = animatableFor(mode, styleParams.mix);
+    const descriptors = animatableFor(mode, { dreamParams, styleParams, presets });
     const stepsFor = (frameIndex: number) =>
       mode === 'deepdream'
         ? paramsAtFrame(dreamParams, animation, frameIndex, descriptors)
@@ -1173,9 +1194,9 @@ function App() {
       if (mode === 'style') {
         const templateImg = await loadImageFromFile(templateFile!);
         templateTensor = imageToWorkingTensor(templateImg, workingMax);
-        // Loaded once for the whole sweep: a track can move an ingredient's numbers, but not its image.
-        mixImages = await loadMixImages(styleParams.mix, workingMax);
       }
+      // Loaded once for the whole sweep: a track can move an ingredient's numbers, but not its image.
+      mixImages = await loadMixImages(mode === 'style' ? styleParams.mix : dreamParams.mix, workingMax);
 
       const baseImg = await loadImageFromFile(baseFile);
       baseTensor = imageToWorkingTensor(baseImg, workingMax);
@@ -1186,12 +1207,23 @@ function App() {
       // which costs the sweep resolution rather than cutting it off partway along its range.
       for (let frameIndex = 0; frameIndex < animation.frames; frameIndex++) {
         if (controller.signal.aborted) break;
-        if (!captured.wants(frameIndex)) continue;
+        // Fed-back frames are each built on the last, so none can be skipped — only left out of the video.
+        const keep = captured.wants(frameIndex);
+        if (!keep && !animation.feedback) continue;
 
         await pauseController.waitIfPaused(controller.signal);
         if (controller.signal.aborted) break;
 
-        const frameParams = stepsFor(frameIndex);
+        // A fed-back frame only needs to nudge what is already there: one octave, a few steps.
+        const fedBack = animation.feedback && previous !== null;
+        const swept = stepsFor(frameIndex);
+        const frameParams = fedBack
+          ? { ...swept, octaves: 1, stepsPerOctave: Math.max(1, Math.round(animation.feedbackSteps)) }
+          : swept;
+        const anchor = Math.min(1, Math.max(0, animation.feedbackAnchor));
+        const startFrom = fedBack
+          ? tf.tidy(() => previous!.mul(1 - anchor).add(baseTensor!.mul(anchor)) as tf.Tensor3D)
+          : undefined;
 
         // Where the sweep has got to, in the terms the user set it up in. A frame number alone says
         // nothing about which value is on screen, which is the whole reason for watching a sweep.
@@ -1214,33 +1246,49 @@ function App() {
           persistProgressSnapshot();
         };
 
-        const result =
-          mode === 'deepdream'
-            ? await runDeepDream(baseTensor, {
-                featureModel,
-                preset: presets.find((p) => p.id === selectedPresetId)!,
-                params: frameParams as DreamParams,
-                signal: controller.signal,
-                pauseController,
-                onProgress: showStep,
-              })
-            : await runStyleTransfer(baseTensor, templateTensor!, {
-                featureModel,
-                params: frameParams as StyleParams,
-                mixImages,
-                presets,
-                signal: controller.signal,
-                pauseController,
-                onProgress: showStep,
-              });
+        let result: tf.Tensor3D;
+        try {
+          result =
+            mode === 'deepdream'
+              ? await runDreamWithMix(baseTensor, {
+                  featureModel,
+                  // Per frame, since a track may be moving a blend weight or anything in the mix.
+                  params: frameParams as DreamParams,
+                  presetId: selectedPresetId,
+                  presets,
+                  mixImages,
+                  signal: controller.signal,
+                  pauseController,
+                  onProgress: showStep,
+                  startFrom,
+                })
+              : await runStyleTransfer(baseTensor, templateTensor!, {
+                  featureModel,
+                  params: frameParams as StyleParams,
+                  mixImages,
+                  presets,
+                  signal: controller.signal,
+                  pauseController,
+                  onProgress: showStep,
+                  startFrom,
+                });
+        } finally {
+          startFrom?.dispose();
+        }
 
         try {
           if (canvasRef.current) {
             await renderTensorToCanvas(result, canvasRef.current);
-            await captured.add(canvasRef.current);
+            if (keep) await captured.add(canvasRef.current);
           }
         } finally {
-          result.dispose();
+          previous?.dispose();
+          previous = null;
+          if (animation.feedback && !controller.signal.aborted) {
+            previous = result;
+          } else {
+            result.dispose();
+          }
           // A frame that moved a size-setting track leaves its whole working set pooled under sizes the next
           // frame won't ask for. See `releasePooledGpuMemory`.
           releasePooledGpuMemory();
@@ -1267,6 +1315,7 @@ function App() {
       baseTensor?.dispose();
       templateTensor?.dispose();
       mixImages?.forEach((image) => image.dispose());
+      previous?.dispose();
       captured.clear();
       releasePooledGpuMemory();
       abortControllerRef.current = null;
@@ -1543,20 +1592,33 @@ function App() {
             />
           </ControlGroup>
 
-          {mode === 'style' && (
-            <ControlGroup title="Mix" defaultOpen={false}>
-              <MixPanel
-                styleParams={styleParams}
-                onStyleParamsChange={setStyleParams}
-                mixPreviews={mixPreviews}
-                onMixImageChange={setMixImage}
-                dreamParams={dreamParams}
-                presets={presets}
-                selectedPresetId={selectedPresetId}
-                isRunning={isRunning}
-              />
-            </ControlGroup>
-          )}
+          <ControlGroup title="Mix" defaultOpen={false}>
+            <MixPanel
+              mode={mode}
+              mix={mode === 'style' ? styleParams.mix : dreamParams.mix}
+              mainTurns={mode === 'style' ? styleParams.templateTurns : dreamParams.mainTurns}
+              onChange={({ mix, mainTurns }) =>
+                mode === 'style'
+                  ? setStyleParams((prev) => ({
+                      ...prev,
+                      mix: mix ?? prev.mix,
+                      templateTurns: mainTurns ?? prev.templateTurns,
+                    }))
+                  : setDreamParams((prev) => ({
+                      ...prev,
+                      mix: mix ?? prev.mix,
+                      mainTurns: mainTurns ?? prev.mainTurns,
+                    }))
+              }
+              mixPreviews={mixPreviews}
+              onMixImageChange={setMixImage}
+              dreamParams={dreamParams}
+              styleParams={styleParams}
+              presets={presets}
+              selectedPresetId={selectedPresetId}
+              isRunning={isRunning}
+            />
+          </ControlGroup>
 
           <ControlGroup title="Animation" defaultOpen={false}>
             <AnimationPanel
@@ -1565,9 +1627,10 @@ function App() {
               onSettingsChange={setAnimation}
               dreamParams={dreamParams}
               styleParams={styleParams}
+              presets={presets}
               isRunning={isRunning}
               canRender={!!baseFile && !isBaseVideo && !!featureModel && (mode === 'deepdream' || !!templateFile)}
-              summary={describeTracks(animation, animatableFor(mode, styleParams.mix))}
+              summary={describeTracks(animation, animatableFor(mode, { dreamParams, styleParams, presets }))}
               onRender={() => void handleRenderAnimation()}
             />
           </ControlGroup>

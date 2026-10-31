@@ -16,9 +16,16 @@ import {
   toRgb,
   withRgbView,
 } from './colorSpace';
-import { dreamAscentStep } from './deepdream';
+import { blendPresets, dreamAscentStep, runDeepDream } from './deepdream';
 import type { PauseController } from './pauseController';
-import type { DreamPreset, MixDreamIngredient, StyleParams } from '../types';
+import type {
+  DreamParams,
+  DreamPreset,
+  MixDreamIngredient,
+  MixIngredient,
+  MixStyleIngredient,
+  StyleParams,
+} from '../types';
 
 export interface StyleTransferProgress {
   octave: number;
@@ -38,15 +45,44 @@ export interface RunStyleTransferOptions {
   mixImages?: Map<string, tf.Tensor3D>;
   /** The presets dream ingredients in `params.mix` name. */
   presets?: DreamPreset[];
+  /**
+   * Where the optimization starts, in place of the content image — an animation's previous frame. The
+   * content image is still what the content loss and color settings hold the result to. Same size as it.
+   */
+  startFrom?: tf.Tensor3D;
 }
 
-/** A style the mix matches against: its targets, its weight, and an optimizer whose momentum is its own. */
+/** A style the mix matches against: its targets, its own settings, and an optimizer whose momentum is its own. */
 interface StyleTurn {
   kind: 'style';
+  ingredient: MixStyleIngredient;
   gramTargets: tf.Tensor2D[];
-  styleWeight: number;
   optimizer: tf.AdamOptimizer;
 }
+
+/**
+ * What a run of any mix takes from the tab it was started on: the octave pyramid, the tiling, and what is done
+ * to the image after every step. Everything a single dream or style does on its own turn is on its ingredient.
+ */
+export type MixFrameParams = Pick<
+  StyleParams,
+  | 'octaves'
+  | 'octaveScale'
+  | 'stepsPerOctave'
+  | 'tileSize'
+  | 'colorSpace'
+  | 'colorPreservation'
+  | 'normalizeSaturation'
+  | 'normalizeBrightness'
+  | 'patternScale'
+  | 'regularizers'
+>;
+
+/** The style loss's own settings, which each style ingredient carries. */
+type StyleLossParams = Pick<
+  StyleParams,
+  'colorSpace' | 'tileSize' | 'contentWeight' | 'styleWeight' | 'totalVariationWeight'
+>;
 
 interface DreamTurn {
   kind: 'dream';
@@ -144,7 +180,7 @@ function makeTiledStyleLoss(
   styleLayers: DiscoveredLayer[],
   readContentTargets: () => Map<string, tf.Tensor>,
   styleGramTargets: tf.Tensor2D[],
-  params: StyleParams,
+  params: StyleLossParams,
 ) {
   // Content and style activations come out of a single pass over the tile. Asking for them separately
   // ran the whole network twice per tile, since a feature model executes the graph once per call.
@@ -245,7 +281,7 @@ async function optimizeStep(
   styleLayers: DiscoveredLayer[],
   contentImageAtOctave: tf.Tensor3D,
   styleGramTargets: tf.Tensor2D[],
-  params: StyleParams,
+  params: StyleLossParams,
 ): Promise<void> {
   // Rebuilt below, once the tiled gradient has chosen this step's jitter.
   let contentTargets = new Map<string, tf.Tensor>();
@@ -290,12 +326,104 @@ async function optimizeStep(
   });
 }
 
+/** The id the main template or main dream goes by in a run's ingredient list. */
+const MAIN_ID = '__main__';
+
+/**
+ * Style transfer: the main template taking its turns, and the mix taking theirs. The template is just the
+ * first style in the rotation, with the Style Transfer tab's settings as its own.
+ */
 export async function runStyleTransfer(
   contentImage: tf.Tensor3D,
   styleImage: tf.Tensor3D,
   options: RunStyleTransferOptions,
 ): Promise<tf.Tensor3D> {
-  const { featureModel, params, onProgress, signal, pauseController, mixImages, presets = [] } = options;
+  const { params, mixImages } = options;
+  const main: MixStyleIngredient = {
+    kind: 'style',
+    id: MAIN_ID,
+    turns: params.templateTurns,
+    templateId: null,
+    name: 'Template',
+    styleWeight: params.styleWeight,
+    contentWeight: params.contentWeight,
+    learningRate: params.learningRate,
+    totalVariationWeight: params.totalVariationWeight,
+  };
+  const images = new Map(mixImages ?? []);
+  images.set(MAIN_ID, styleImage);
+  return runMix(contentImage, { ...options, frame: params, ingredients: [main, ...params.mix], images });
+}
+
+/** The DeepDream tab's own dream, as the ingredient that leads its mix. */
+export function mainDreamIngredient(params: DreamParams, presetId: string): MixDreamIngredient {
+  return {
+    kind: 'dream',
+    id: MAIN_ID,
+    turns: params.mainTurns,
+    presetId,
+    presetWeight: params.presetWeight,
+    presetBlend: params.presetBlend,
+    name: 'Main dream',
+    stepSize: params.stepSize,
+    focusSeed: params.focusSeed,
+    focusChannels: params.focusChannels,
+    morphSeed: params.morphSeed,
+    morph: params.morph,
+    objective: params.objective,
+    lapLevels: params.lapLevels,
+    tvWeight: params.tvWeight,
+  };
+}
+
+export interface RunDreamOptions extends Omit<RunStyleTransferOptions, 'params'> {
+  params: DreamParams;
+  /** The DeepDream tab's selected preset; the rest of the main dream comes from `params`. */
+  presetId: string;
+}
+
+/**
+ * DeepDream, with its mix. With nothing in the mix taking turns this is exactly the plain run it always was;
+ * otherwise the main dream is the first entry in a rotation of dreams and styles.
+ */
+export async function runDreamWithMix(baseImage: tf.Tensor3D, options: RunDreamOptions): Promise<tf.Tensor3D> {
+  const { params, presetId, presets = [], mixImages } = options;
+  if (!params.mix.some((entry) => Math.round(entry.turns) > 0)) {
+    const preset = blendPresets(presets, presetId, params.presetWeight, params.presetBlend);
+    if (!preset) throw new Error('No preset selected.');
+    return runDeepDream(baseImage, { ...options, preset });
+  }
+  return runMix(baseImage, {
+    ...options,
+    frame: params,
+    ingredients: [mainDreamIngredient(params, presetId), ...params.mix],
+    images: mixImages ?? new Map(),
+  });
+}
+
+export interface RunMixOptions {
+  featureModel: FeatureModel;
+  frame: MixFrameParams;
+  /** The rotation, in order; each takes its `turns` consecutive steps before handing the image on. */
+  ingredients: MixIngredient[];
+  /** The image for each style ingredient, by id, already at working size. */
+  images: Map<string, tf.Tensor3D>;
+  /** The presets dream ingredients name. */
+  presets?: DreamPreset[];
+  onProgress?: (progress: StyleTransferProgress) => void | Promise<void>;
+  signal?: AbortSignal;
+  pauseController?: PauseController;
+  /** Where the image starts, in place of the content image. See `RunStyleTransferOptions.startFrom`. */
+  startFrom?: tf.Tensor3D;
+}
+
+/**
+ * Any number of dreams and styles taking turns on one image. Styles step with Adam, each with its own
+ * momentum; dreams take plain ascent steps written straight into the same variable.
+ */
+export async function runMix(contentImage: tf.Tensor3D, options: RunMixOptions): Promise<tf.Tensor3D> {
+  const { featureModel, frame: params, ingredients, images, onProgress, signal, pauseController, presets = [], startFrom } =
+    options;
 
   const sorted = [...featureModel.layers].sort((a, b) => a.depthIndex - b.depthIndex);
   const byName = new Map(sorted.map((layer) => [layer.nodeName, layer]));
@@ -320,45 +448,54 @@ export async function runStyleTransfer(
   }
 
   // Resolved before anything is allocated, so a mix that cannot run says so without leaving tensors behind.
-  for (const ingredient of params.mix) {
-    if (ingredient.kind === 'style' && !mixImages?.get(ingredient.id)) {
+  const dreamPresets = new Map<string, DreamPreset>();
+  for (const ingredient of ingredients) {
+    if (ingredient.kind === 'style' && !images.get(ingredient.id)) {
       throw new Error(`Pick an image for "${ingredient.name}" in the mix, or remove it.`);
     }
-    if (ingredient.kind === 'dream' && !presets.some((p) => p.id === ingredient.presetId)) {
-      throw new Error(`The preset for "${ingredient.name}" in the mix is not available with this network.`);
+    if (ingredient.kind === 'dream') {
+      const preset = blendPresets(presets, ingredient.presetId, ingredient.presetWeight, ingredient.presetBlend);
+      if (!preset) {
+        throw new Error(
+          ingredient.id === MAIN_ID
+            ? 'No preset selected.'
+            : `The preset for "${ingredient.name}" in the mix is not available with this network.`,
+        );
+      }
+      dreamPresets.set(ingredient.id, preset);
     }
   }
 
-  // Style statistics don't depend on octave resolution, so these are computed once up front — for the
-  // main template and for every style in the mix.
-  const styleTurns: StyleTurn[] = [];
-  const addStyle = (image: tf.Tensor3D, styleWeight: number): StyleTurn => {
-    const turn: StyleTurn = {
-      kind: 'style',
-      gramTargets: computeStyleGramTargets(featureModel, image, styleLayers, params.tileSize),
-      styleWeight,
-      optimizer: tf.train.adam(params.learningRate),
-    };
-    styleTurns.push(turn);
-    return turn;
-  };
+  // The cycle the run walks through, one entry per step. An ingredient at zero turns sits out, which is what
+  // lets an animation fade one in or out — and is the only thing it costs: a style's targets are computed
+  // only if it takes part. Everything at zero would be a run that does nothing, so then the first one runs.
+  const active = ingredients.filter((ingredient) => Math.round(ingredient.turns) > 0);
+  const rotation = active.length > 0 ? active : ingredients.slice(0, 1);
 
-  // The cycle the run walks through, one entry per step: the main template's turns, then each ingredient's.
-  // An ingredient at zero turns sits out, which is what lets an animation fade one in or out.
+  // Style statistics don't depend on octave resolution, so these are computed once up front.
+  const styleTurns: StyleTurn[] = [];
   const schedule: (StyleTurn | DreamTurn)[] = [];
-  const templateTurn = addStyle(styleImage, params.styleWeight);
-  for (let i = 0; i < Math.round(params.templateTurns); i++) schedule.push(templateTurn);
-  for (const ingredient of params.mix) {
-    const turns = Math.max(0, Math.round(ingredient.turns));
-    if (turns === 0) continue;
-    const entry: StyleTurn | DreamTurn =
-      ingredient.kind === 'style'
-        ? addStyle(mixImages!.get(ingredient.id)!, ingredient.styleWeight)
-        : { kind: 'dream', ingredient, preset: presets.find((p) => p.id === ingredient.presetId)! };
-    for (let i = 0; i < turns; i++) schedule.push(entry);
+  try {
+    for (const ingredient of rotation) {
+      const entry: StyleTurn | DreamTurn =
+        ingredient.kind === 'style'
+          ? {
+              kind: 'style',
+              ingredient,
+              gramTargets: computeStyleGramTargets(featureModel, images.get(ingredient.id)!, styleLayers, params.tileSize),
+              optimizer: tf.train.adam(ingredient.learningRate),
+            }
+          : { kind: 'dream', ingredient, preset: dreamPresets.get(ingredient.id)! };
+      if (entry.kind === 'style') styleTurns.push(entry);
+      for (let i = 0; i < Math.max(1, Math.round(ingredient.turns)); i++) schedule.push(entry);
+    }
+  } catch (err) {
+    for (const turn of styleTurns) {
+      turn.gramTargets.forEach((g) => g.dispose());
+      turn.optimizer.dispose();
+    }
+    throw err;
   }
-  // Everything at zero turns would be a run that does nothing; the template is the honest fallback.
-  if (schedule.length === 0) schedule.push(templateTurn);
   let scheduleIndex = 0;
 
   const [h, w] = contentImage.shape;
@@ -393,7 +530,9 @@ export async function runStyleTransfer(
   // `generated` is held in the working color space from here on; `contentImageAtOctave` stays RGB, since
   // it only ever feeds the network.
   let generated = asVariable(
-    tf.tidy(() => fromRgb(tf.image.resizeBilinear(contentImage, shapes[0]) as tf.Tensor3D, params.colorSpace)),
+    tf.tidy(() =>
+      fromRgb(tf.image.resizeBilinear(startFrom ?? contentImage, shapes[0]) as tf.Tensor3D, params.colorSpace),
+    ),
   );
   let contentImageAtOctave = tf.tidy(
     () => tf.keep(tf.image.resizeBilinear(contentImage, shapes[0])) as tf.Tensor3D,
@@ -421,7 +560,7 @@ export async function runStyleTransfer(
         // recreated at each octave's resolution, a fresh optimizer avoids reusing wrong-shaped moment tensors.
         for (const turn of styleTurns) {
           turn.optimizer.dispose();
-          turn.optimizer = tf.train.adam(params.learningRate);
+          turn.optimizer = tf.train.adam(turn.ingredient.learningRate);
         }
 
         contentImageAtOctave.dispose();
@@ -454,7 +593,7 @@ export async function runStyleTransfer(
             styleLayers,
             contentImageAtOctave,
             turn.gramTargets,
-            { ...params, styleWeight: turn.styleWeight },
+            { ...turn.ingredient, colorSpace: params.colorSpace, tileSize: params.tileSize },
           );
         } else {
           // A plain ascent step written straight into the variable. Adam's moments carry on across it, so the
@@ -468,6 +607,8 @@ export async function runStyleTransfer(
             stepSize: ingredient.stepSize,
             focusSeed: ingredient.focusSeed,
             focusChannels: ingredient.focusChannels,
+            morphSeed: ingredient.morphSeed,
+            morph: ingredient.morph,
             objective: ingredient.objective,
           });
           generated.assign(dreamed);

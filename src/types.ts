@@ -15,6 +15,20 @@ export interface DreamPreset {
   name: string;
   description: string;
   layers: DreamLayerTarget[];
+  /**
+   * Present on a blend of several presets: each one's layers, with its share of the push. The loss scales
+   * each group to the same size before weighting it, so a share means a share rather than whichever layer
+   * happens to respond most strongly. See `blendPresets`.
+   */
+  groups?: { weight: number; layers: DreamLayerTarget[] }[];
+}
+
+/** A further preset amplified alongside the selected one, with its own share of the push. */
+export interface PresetBlendEntry {
+  /** Stable, so an animation track on this entry's weight stays with it. */
+  id: string;
+  presetId: string;
+  weight: number;
 }
 
 /**
@@ -60,10 +74,25 @@ export interface DreamParams {
    * effect; any other number names one reproducible handful. See `ml/channelFocus`.
    */
   focusSeed: number;
-  /** How many channels a nonzero `focusSeed` picks per layer. Fewer gives purer, stranger forms. */
+  /**
+   * How many channels a nonzero `focusSeed` picks per layer. Fewer gives purer, stranger forms. A fraction
+   * fades the next channel in, so a sweep of it is smooth.
+   */
   focusChannels: number;
+  /** The variation `morph` moves toward. 0 is the whole layer, as for `focusSeed`. */
+  morphSeed: number;
+  /** 0 is `focusSeed` alone, 1 is `morphSeed` alone; between, a continuous mix of the two. */
+  morph: number;
   /** How activations are scored. See `DreamObjective`. */
   objective: DreamObjective;
+  /** The selected preset's share of the push when others are blended in. */
+  presetWeight: number;
+  /** Consecutive steps the main dream takes each time round the mix. See `MixIngredient`. */
+  mainTurns: number;
+  /** Further dreams and styles taking turns with the main dream. Empty is plain DeepDream. */
+  mix: MixIngredient[];
+  /** Further presets amplified at the same time as the selected one. Empty is the preset alone. */
+  presetBlend: PresetBlendEntry[];
 }
 
 /**
@@ -99,14 +128,16 @@ export interface StyleParams {
   regularizers: ImageRegularizers;
   /** Consecutive steps the main template takes each time round the mix. See `MixIngredient`. */
   templateTurns: number;
-  /** Further styles and tuned DeepDream presets taking turns on the same image. Empty is plain style transfer. */
+  /** Further styles and dreams taking turns with the template. Empty is plain style transfer. */
   mix: MixIngredient[];
 }
 
 /**
- * One entry in a style run's mix. A run cycles through the main template and then each ingredient in order,
- * each taking `turns` consecutive steps on the one shared image before handing it on, and `stepsPerOctave`
- * counts all of those steps together.
+ * One entry in a run's mix, on either tab. A run cycles through the tab's main dream or template and then each
+ * ingredient in order, each taking `turns` consecutive steps on the one shared image before handing it on, and
+ * `stepsPerOctave` counts all of those steps together. Every ingredient carries all of its own settings; what it
+ * takes from the tab is only the frame of the run — octaves, tiling, and what is done to the image after each
+ * step.
  */
 export type MixIngredient = MixStyleIngredient | MixDreamIngredient;
 
@@ -116,23 +147,31 @@ interface MixIngredientBase {
   turns: number;
 }
 
-/** Another style image, matched with its own weight and its own optimizer state. */
+/** A style image, matched with its own settings and its own optimizer state. */
 export interface MixStyleIngredient extends MixIngredientBase {
   kind: 'style';
   /** The built-in template it uses, or null for the user's own file, which a saved picture cannot carry. */
   templateId: string | null;
   name: string;
   styleWeight: number;
+  contentWeight: number;
+  learningRate: number;
+  totalVariationWeight: number;
 }
 
-/** A DeepDream preset as it was tuned when added, taking plain ascent steps between the style steps. */
+/** A DeepDream preset with its own tuning, taking plain ascent steps on its turns. */
 export interface MixDreamIngredient extends MixIngredientBase {
   kind: 'dream';
   presetId: string;
+  presetWeight: number;
+  /** Further presets blended in, exactly as `DreamParams.presetBlend`. */
+  presetBlend: PresetBlendEntry[];
   name: string;
   stepSize: number;
   focusSeed: number;
   focusChannels: number;
+  morphSeed: number;
+  morph: number;
   objective: DreamObjective;
   lapLevels: number;
   tvWeight: number;

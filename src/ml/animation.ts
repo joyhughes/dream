@@ -1,5 +1,5 @@
 import { getDeviceLimits } from './deviceLimits';
-import type { DreamParams, MixIngredient, Mode, StyleParams } from '../types';
+import type { DreamParams, DreamPreset, MixIngredient, Mode, PresetBlendEntry, StyleParams } from '../types';
 
 /**
  * Sweeping a parameter across a range and keeping every frame.
@@ -39,10 +39,14 @@ export const DREAM_ANIMATABLE: AnimatableParam[] = [
   { path: 'regularizers.blurSigma', label: 'Blur strength', min: 0, max: 2, step: 0.1 },
   { path: 'regularizers.blurEvery', label: 'Blur every N steps', min: 0, max: 20, step: 1, integer: true },
   { path: 'regularizers.l2Decay', label: 'L2 decay', min: 0, max: 0.1, step: 0.005 },
+  { path: 'presetWeight', label: 'Selected preset weight', min: 0, max: 1, step: 0.05 },
   // A sweep of the variation is a contact sheet rather than a motion: each frame is its own set of channels,
-  // so rendering 1 to 24 shows twenty-four different families of forms side by side in time.
+  // so rendering 1 to 24 shows twenty-four different families of forms side by side in time. Morph is the
+  // motion: one family turning continuously into another.
   { path: 'focusSeed', label: 'Variation', min: 0, max: 999, step: 1, integer: true },
-  { path: 'focusChannels', label: 'Focus channels', min: 1, max: 64, step: 1, integer: true },
+  { path: 'morph', label: 'Morph', min: 0, max: 1, step: 0.01 },
+  { path: 'morphSeed', label: 'Morph toward', min: 0, max: 999, step: 1, integer: true },
+  { path: 'focusChannels', label: 'Focus channels', min: 1, max: 64, step: 0.25 },
 ];
 
 export const STYLE_ANIMATABLE: AnimatableParam[] = [
@@ -67,7 +71,7 @@ export const STYLE_ANIMATABLE: AnimatableParam[] = [
  * id rather than position, so a track keeps following its ingredient when another is removed — and a track
  * whose ingredient is gone simply finds no descriptor and is skipped.
  */
-function mixAnimatable(mix: MixIngredient[]): AnimatableParam[] {
+function mixAnimatable(mix: MixIngredient[], presets: DreamPreset[]): AnimatableParam[] {
   return mix.flatMap((ingredient): AnimatableParam[] => {
     const at = (field: string) => `mix.${ingredient.id}.${field}`;
     const turns = { path: at('turns'), label: `${ingredient.name}: turns`, min: 0, max: 10, step: 1, integer: true };
@@ -75,20 +79,60 @@ function mixAnimatable(mix: MixIngredient[]): AnimatableParam[] {
     if (ingredient.kind === 'style') {
       return [
         { path: at('styleWeight'), label: `${ingredient.name}: style weight`, min: 1, max: 2000, step: 10 },
+        { path: at('contentWeight'), label: `${ingredient.name}: content weight`, min: 1, max: 50, step: 1 },
+        { path: at('learningRate'), label: `${ingredient.name}: learning rate`, min: 0.002, max: 0.05, step: 0.002 },
         turns,
       ];
     }
     return [
       { path: at('stepSize'), label: `${ingredient.name}: step size`, min: 0.005, max: 0.1, step: 0.005 },
+      { path: at('tvWeight'), label: `${ingredient.name}: smoothing`, min: 0, max: 1, step: 0.05 },
       { path: at('focusSeed'), label: `${ingredient.name}: variation`, min: 0, max: 999, step: 1, integer: true },
-      { path: at('focusChannels'), label: `${ingredient.name}: focus channels`, min: 1, max: 64, step: 1, integer: true },
+      { path: at('morph'), label: `${ingredient.name}: morph`, min: 0, max: 1, step: 0.01 },
+      { path: at('morphSeed'), label: `${ingredient.name}: morph toward`, min: 0, max: 999, step: 1, integer: true },
+      { path: at('focusChannels'), label: `${ingredient.name}: focus channels`, min: 1, max: 64, step: 0.25 },
+      ...(ingredient.presetBlend.length > 0
+        ? [
+            { path: at('presetWeight'), label: `${ingredient.name}: ${presetName(presets, ingredient.presetId)} weight`, min: 0, max: 1, step: 0.05 },
+            ...blendAnimatable(ingredient.presetBlend, presets, at('presetBlend'), `${ingredient.name}: `),
+          ]
+        : []),
       turns,
     ];
   });
 }
 
-export function animatableFor(mode: Mode, mix: MixIngredient[] = []): AnimatableParam[] {
-  return mode === 'deepdream' ? DREAM_ANIMATABLE : [...STYLE_ANIMATABLE, ...mixAnimatable(mix)];
+function presetName(presets: DreamPreset[], id: string): string {
+  return presets.find((p) => p.id === id)?.name ?? id;
+}
+
+/** A weight track per blended preset, under `<prefix>.<entry id>.weight`. */
+function blendAnimatable(blend: PresetBlendEntry[], presets: DreamPreset[], prefix: string, labelPrefix = ''): AnimatableParam[] {
+  return blend.map((entry) => ({
+    path: `${prefix}.${entry.id}.weight`,
+    label: `${labelPrefix}${presetName(presets, entry.presetId)} weight`,
+    min: 0,
+    max: 1,
+    step: 0.05,
+  }));
+}
+
+export interface AnimatableContext {
+  dreamParams: DreamParams;
+  styleParams: StyleParams;
+  presets: DreamPreset[];
+}
+
+/** What can be swept in a mode: the fixed list, plus whatever the current blend and mix add. */
+export function animatableFor(mode: Mode, { dreamParams, styleParams, presets }: AnimatableContext): AnimatableParam[] {
+  return mode === 'deepdream'
+    ? [
+        ...DREAM_ANIMATABLE,
+        ...blendAnimatable(dreamParams.presetBlend, presets, 'presetBlend'),
+        { path: 'mainTurns', label: 'Main dream turns', min: 0, max: 10, step: 1, integer: true },
+        ...mixAnimatable(dreamParams.mix, presets),
+      ]
+    : [...STYLE_ANIMATABLE, ...mixAnimatable(styleParams.mix, presets)];
 }
 
 /**
@@ -131,47 +175,59 @@ export interface AnimationSettings {
   tracks: AnimationTrack[];
   frames: number;
   fps: number;
+  /**
+   * Each frame after the first starts from the one before, rather than from the photo. A full run amplifies
+   * any change to its settings into a different arrangement of forms, so independent frames flicker; carried
+   * over, the forms already drawn stay put and drift as the settings move — the classic DeepDream video.
+   */
+  feedback: boolean;
+  /** Steps of the short, single-octave pass each fed-back frame gets. */
+  feedbackSteps: number;
+  /** How much of the photo is mixed back into each fed-back frame's start, so a long sweep can't run away. */
+  feedbackAnchor: number;
 }
 
 export const DEFAULT_ANIMATION: AnimationSettings = {
   tracks: [],
   frames: 24,
   fps: 8,
+  feedback: false,
+  feedbackSteps: 10,
+  feedbackAnchor: 0.1,
 };
 
 type ParamsLike = DreamParams | StyleParams;
 
-function mixOf(params: ParamsLike): MixIngredient[] {
-  return 'mix' in params ? params.mix : [];
+/**
+ * Paths are dot-separated, and a segment that lands on a list names an entry by its `id` rather than its
+ * position: `regularizers.blurSigma`, `mix.<id>.stepSize`, `mix.<id>.presetBlend.<id>.weight`.
+ */
+function child(node: unknown, segment: string): unknown {
+  if (Array.isArray(node)) return node.find((entry: { id?: string }) => entry?.id === segment);
+  return node && typeof node === 'object' ? (node as Record<string, unknown>)[segment] : undefined;
 }
 
 export function readParam(params: ParamsLike, path: string): number {
-  const [head, tail, field] = path.split('.');
-  if (head === 'mix') {
-    const ingredient = mixOf(params).find((entry) => entry.id === tail) as unknown as Record<string, unknown> | undefined;
-    const value = ingredient?.[field];
-    return typeof value === 'number' ? value : 0;
-  }
-
-  const source = params as unknown as Record<string, unknown>;
-  const value = tail ? (source[head] as Record<string, unknown> | undefined)?.[tail] : source[head];
+  const value = path.split('.').reduce<unknown>(child, params);
   return typeof value === 'number' ? value : 0;
+}
+
+/** Copies `node` with the value at `segments` replaced, rebuilding only the branch it runs through. */
+function withValue(node: unknown, segments: string[], value: number): unknown {
+  const [segment, ...rest] = segments;
+  if (Array.isArray(node)) {
+    return node.map((entry: { id?: string }) => (entry?.id === segment ? withValue(entry, rest, value) : entry));
+  }
+  const record = (node ?? {}) as Record<string, unknown>;
+  if (rest.length === 0) return { ...record, [segment]: value };
+  // A path into something that is not there — a removed entry — changes nothing rather than inventing it.
+  if (!(segment in record)) return record;
+  return { ...record, [segment]: withValue(record[segment], rest, value) };
 }
 
 /** A copy with one value replaced. Nested paths rebuild only the branch they touch. */
 export function withParam<T extends ParamsLike>(params: T, path: string, value: number): T {
-  const [head, tail, field] = path.split('.');
-  if (head === 'mix') {
-    const mix = mixOf(params).map((entry) => (entry.id === tail ? { ...entry, [field]: value } : entry));
-    return { ...params, mix };
-  }
-
-  if (!tail) {
-    return { ...params, [head]: value };
-  }
-
-  const branch = (params as unknown as Record<string, unknown>)[head] as Record<string, unknown>;
-  return { ...params, [head]: { ...branch, [tail]: value } };
+  return withValue(params, path.split('.'), value) as T;
 }
 
 /**

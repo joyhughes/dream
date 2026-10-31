@@ -18,8 +18,10 @@ import type {
   DreamPreset,
   EngineStatus,
   ImageRegularizers,
+  MixDreamIngredient,
   MixIngredient,
   Mode,
+  PresetBlendEntry,
   StyleParams,
 } from '../types';
 import { getDeviceLimits } from '../ml/deviceLimits';
@@ -205,6 +207,121 @@ function Toggle({ label, checked, tooltip, onChange, disabled }: ToggleProps) {
   );
 }
 
+interface PresetBlendEditorProps {
+  presets: DreamPreset[];
+  /** The preset everything else is blended with. */
+  presetId: string;
+  presetWeight: number;
+  blend: PresetBlendEntry[];
+  onChange: (change: { presetId?: string; presetWeight?: number; presetBlend?: PresetBlendEntry[] }) => void;
+  /** Whether to show a picker for `presetId` itself, for places that do not already have one. */
+  pickPrimary?: boolean;
+  disabled: boolean;
+}
+
+function PresetSelect({
+  presets,
+  value,
+  onChange,
+  disabled,
+}: {
+  presets: DreamPreset[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled: boolean;
+}) {
+  return (
+    <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}>
+      {presets.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/**
+ * Any number of presets amplified at once, each with its share of the push.
+ *
+ * Shares rather than raw weights: each preset's pull is scaled to the same size before its weight applies,
+ * so 0.5 and 0.5 is an even split however differently the layers behind them respond. A single preset is
+ * untouched by any of this and runs exactly as it always did.
+ */
+function PresetBlendEditor({ presets, presetId, presetWeight, blend, onChange, pickPrimary, disabled }: PresetBlendEditorProps) {
+  const setEntry = (id: string, patch: Partial<PresetBlendEntry>) =>
+    onChange({ presetBlend: blend.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)) });
+  // The next preset down the list that is not already in play, as the likeliest one to want next.
+  const used = new Set([presetId, ...blend.map((entry) => entry.presetId)]);
+  const next = presets.find((p) => !used.has(p.id)) ?? presets[0];
+
+  return (
+    <>
+      {pickPrimary && (
+        <label className="field-row" title="The preset this dream amplifies.">
+          <span>Preset</span>
+          <PresetSelect presets={presets} value={presetId} onChange={(id) => onChange({ presetId: id })} disabled={disabled} />
+        </label>
+      )}
+      {blend.length > 0 && (
+        <Slider
+          label={`${presets.find((p) => p.id === presetId)?.name ?? 'Preset'} weight`}
+          value={presetWeight}
+          min={0}
+          max={1}
+          step={0.05}
+          disabled={disabled}
+          tooltip="This preset's share of the push, against the others blended in. Every preset's pull is scaled to the same strength before its weight applies, so equal weights are an even split."
+          onChange={(v) => onChange({ presetWeight: Math.max(0, v) })}
+        />
+      )}
+      {blend.map((entry) => (
+        <div key={entry.id} className="preset-blend-entry">
+          <div className="field-row">
+            <span>+</span>
+            <PresetSelect
+              presets={presets}
+              value={entry.presetId}
+              onChange={(id) => setEntry(entry.id, { presetId: id })}
+              disabled={disabled}
+            />
+            <button
+              className="btn btn--secondary"
+              onClick={() => onChange({ presetBlend: blend.filter((other) => other.id !== entry.id) })}
+              disabled={disabled}
+              title="Stops blending this preset in."
+            >
+              Remove
+            </button>
+          </div>
+          <Slider
+            label="Weight"
+            value={entry.weight}
+            min={0}
+            max={1}
+            step={0.05}
+            disabled={disabled}
+            tooltip="This preset's share of the push, against the others. 0 sits it out without removing it."
+            onChange={(v) => setEntry(entry.id, { weight: Math.max(0, v) })}
+          />
+        </div>
+      ))}
+      <div className="controls-actions">
+        <button
+          className="btn btn--secondary"
+          onClick={() =>
+            next && onChange({ presetBlend: [...blend, { id: newIngredientId(), presetId: next.id, weight: 1 }] })
+          }
+          disabled={disabled || !next}
+          title="Amplifies another preset at the same time — fine textures under abstract objects, say — with its own weight."
+        >
+          Blend in a preset
+        </button>
+      </div>
+    </>
+  );
+}
+
 interface PresetPanelProps {
   mode: Mode;
   presets: DreamPreset[];
@@ -222,6 +339,120 @@ function rollVariation(current: number): number {
   return next;
 }
 
+type VariationFields = Pick<DreamParams, 'focusSeed' | 'focusChannels' | 'morphSeed' | 'morph'>;
+
+/**
+ * Variation, and a continuous morph from it toward a second one. Variations themselves are unrelated sets of
+ * channels, so stepping the number jumps between families; the morph is the control that moves smoothly, and
+ * the one to animate. Shared by the DeepDream tab and every DeepDream entry in a style mix.
+ */
+function VariationControls({
+  values,
+  onChange,
+  disabled,
+  compact = false,
+}: {
+  values: VariationFields;
+  onChange: (patch: Partial<VariationFields>) => void;
+  disabled: boolean;
+  /** Fewer explanations, for the mix's nested entries. */
+  compact?: boolean;
+}) {
+  const morphing = values.morphSeed !== values.focusSeed;
+  const focused = values.focusSeed > 0 || (morphing && values.morphSeed > 0);
+
+  return (
+    <>
+      <Slider
+        label="Variation"
+        value={values.focusSeed}
+        min={0}
+        max={999}
+        step={1}
+        disabled={disabled}
+        tooltip={
+          compact
+            ? 'Which set of feature detectors this dream amplifies, as on the DeepDream tab. 0 is the whole layer.'
+            : "Which of the layer's feature detectors to amplify. 0 amplifies all of them at once, which averages their ideas into the familiar blend. Any other number picks a small, fixed set of them, and each set has its own family of creatures and objects — the same number always gives the same set, so a good one can be typed back in later. Neighbouring numbers are unrelated sets: to move smoothly between two, use Morph. Strongest on the late-layer presets."
+        }
+        onChange={(v) => onChange({ focusSeed: Math.max(0, Math.round(v)) })}
+      />
+      <div className="controls-actions">
+        <button
+          className="btn btn--secondary"
+          onClick={() => onChange({ focusSeed: rollVariation(values.focusSeed) })}
+          disabled={disabled}
+          title="Picks a different variation at random. Generate again to see what it draws."
+        >
+          Roll variation
+        </button>
+        <button
+          className="btn btn--secondary"
+          onClick={() => onChange({ focusSeed: 0 })}
+          disabled={disabled || values.focusSeed === 0}
+          title="Goes back to amplifying the whole layer."
+        >
+          Whole layer
+        </button>
+      </div>
+      <Slider
+        label="Morph toward"
+        value={values.morphSeed}
+        min={0}
+        max={999}
+        step={1}
+        disabled={disabled}
+        tooltip="A second variation to blend toward, with Morph setting how far. 0 is the whole layer. Set it to the same number as Variation to switch morphing off."
+        onChange={(v) => onChange({ morphSeed: Math.max(0, Math.round(v)) })}
+      />
+      <div className="controls-actions">
+        <button
+          className="btn btn--secondary"
+          onClick={() => onChange({ morphSeed: rollVariation(values.morphSeed) })}
+          disabled={disabled}
+          title="Picks a different variation to morph toward at random."
+        >
+          Roll target
+        </button>
+        <button
+          className="btn btn--secondary"
+          onClick={() =>
+            onChange({ focusSeed: values.morphSeed, morphSeed: values.focusSeed, morph: 1 - values.morph })
+          }
+          disabled={disabled || !morphing}
+          title="Swaps the two variations and flips Morph to match, so the image comes out the same — handy for rolling a new target from wherever you've got to."
+        >
+          Swap
+        </button>
+      </div>
+      {morphing && (
+        <Slider
+          label="Morph"
+          value={values.morph}
+          min={0}
+          max={1}
+          step={0.01}
+          disabled={disabled}
+          tooltip="How far from Variation toward Morph toward: 0 is the first alone, 1 is the second alone, and every point between is a continuous mix of the two. Each side is balanced to the same strength, so 0.5 really is half and half. Animate this for one family turning into another."
+          onChange={(v) => onChange({ morph: v })}
+        />
+      )}
+      {focused && (
+        <Slider
+          label="Focus channels"
+          value={values.focusChannels}
+          min={1}
+          max={64}
+          step={compact ? 1 : 0.25}
+          disabled={disabled}
+          tooltip="How many feature detectors a variation amplifies. One or two give the purest and strangest forms; more mix them toward the whole-layer look. Raising this keeps the detectors already chosen and adds to them, so the variation fills out rather than changing — and a fraction fades the next one in, so this moves smoothly too."
+          onChange={(v) => onChange({ focusChannels: Math.max(1, v) })}
+        />
+      )}
+    </>
+  );
+}
+
 export function PresetPanel({
   mode,
   presets,
@@ -232,8 +463,6 @@ export function PresetPanel({
   isRunning,
 }: PresetPanelProps) {
   if (mode !== 'deepdream') return null;
-
-  const focused = dreamParams.focusSeed > 0;
 
   return (
     <div className="preset-panel">
@@ -251,47 +480,23 @@ export function PresetPanel({
         </select>
       </label>
       <p className="field-hint">{presets.find((p) => p.id === selectedPresetId)?.description}</p>
-
-      <Slider
-        label="Variation"
-        value={dreamParams.focusSeed}
-        min={0}
-        max={999}
-        step={1}
+      <PresetBlendEditor
+        presets={presets}
+        presetId={selectedPresetId}
+        presetWeight={dreamParams.presetWeight}
+        blend={dreamParams.presetBlend}
+        onChange={(change) => {
+          if (change.presetId) onPresetChange(change.presetId);
+          onDreamParamsChange({ ...dreamParams, ...change });
+        }}
         disabled={isRunning}
-        tooltip="Which of the layer's feature detectors to amplify. 0 amplifies all of them at once, which averages their ideas into the familiar blend. Any other number picks a small, fixed set of them, and each set has its own family of creatures and objects — the same number always gives the same set, so a good one can be typed back in later. Strongest on the late-layer presets."
-        onChange={(v) => onDreamParamsChange({ ...dreamParams, focusSeed: Math.max(0, Math.round(v)) })}
       />
-      <div className="controls-actions">
-        <button
-          className="btn btn--secondary"
-          onClick={() => onDreamParamsChange({ ...dreamParams, focusSeed: rollVariation(dreamParams.focusSeed) })}
-          disabled={isRunning}
-          title="Picks a different variation at random. Generate again to see what it draws."
-        >
-          Roll variation
-        </button>
-        <button
-          className="btn btn--secondary"
-          onClick={() => onDreamParamsChange({ ...dreamParams, focusSeed: 0 })}
-          disabled={isRunning || !focused}
-          title="Goes back to amplifying the whole layer."
-        >
-          Whole layer
-        </button>
-      </div>
-      {focused && (
-        <Slider
-          label="Focus channels"
-          value={dreamParams.focusChannels}
-          min={1}
-          max={64}
-          step={1}
-          disabled={isRunning}
-          tooltip="How many feature detectors a variation amplifies. One or two give the purest and strangest forms; more mix them toward the whole-layer look. Raising this keeps the detectors already chosen and adds to them, so the variation fills out rather than changing."
-          onChange={(v) => onDreamParamsChange({ ...dreamParams, focusChannels: Math.max(1, Math.round(v)) })}
-        />
-      )}
+
+      <VariationControls
+        values={dreamParams}
+        onChange={(patch) => onDreamParamsChange({ ...dreamParams, ...patch })}
+        disabled={isRunning}
+      />
       <label
         className="field-row"
         title="How the network's response is scored. Average rewards every response equally and spreads detail evenly. Sharpened rewards the strongest responses most, so whatever the network half-sees is pushed hardest: fewer, bolder, more fully formed shapes."
@@ -343,6 +548,8 @@ interface AnimationPanelProps {
   onSettingsChange: (settings: AnimationSettings) => void;
   dreamParams: DreamParams;
   styleParams: StyleParams;
+  /** Names the blend's and the mix's presets in track labels. */
+  presets: DreamPreset[];
   isRunning: boolean;
   /** False when there is nothing to render from — no photo, a video, or no style template. */
   canRender: boolean;
@@ -363,12 +570,13 @@ export function AnimationPanel({
   onSettingsChange,
   dreamParams,
   styleParams,
+  presets,
   isRunning,
   canRender,
   summary,
   onRender,
 }: AnimationPanelProps) {
-  const descriptors = animatableFor(mode, styleParams.mix);
+  const descriptors = animatableFor(mode, { dreamParams, styleParams, presets });
   const params = mode === 'deepdream' ? dreamParams : styleParams;
 
   const trackFor = (path: string) => settings.tracks.find((track) => track.path === path);
@@ -475,6 +683,37 @@ export function AnimationPanel({
         })}
       </div>
 
+      <Toggle
+        label="Frame feedback"
+        checked={settings.feedback}
+        disabled={isRunning}
+        tooltip="Starts each frame from the one before instead of from the photo. A full run turns even a tiny change of setting into a different arrangement of forms, so separate frames flicker; with feedback the forms already drawn stay put and drift as the settings move, the way DeepDream videos are made. The first frame is a full run; the rest are a short pass each."
+        onChange={(on) => onSettingsChange({ ...settings, feedback: on })}
+      />
+      {settings.feedback && (
+        <>
+          <Slider
+            label="Steps per frame"
+            value={settings.feedbackSteps}
+            min={1}
+            max={40}
+            step={1}
+            disabled={isRunning}
+            tooltip="How many steps each frame after the first gets, at one octave. Fewer keeps frames closer to each other and renders faster; more lets each frame follow the settings more closely, and lets the dream grow deeper over the sweep."
+            onChange={(v) => onSettingsChange({ ...settings, feedbackSteps: Math.max(1, Math.round(v)) })}
+          />
+          <Slider
+            label="Pull toward photo"
+            value={settings.feedbackAnchor}
+            min={0}
+            max={0.5}
+            step={0.01}
+            disabled={isRunning}
+            tooltip="How much of the original photo is mixed back into each frame before it is dreamed on. 0 lets the dream keep compounding, which over a long sweep can wash out into pure texture; a little holds the photo's shapes underneath."
+            onChange={(v) => onSettingsChange({ ...settings, feedbackAnchor: v })}
+          />
+        </>
+      )}
       <Slider
         label="Frames"
         value={settings.frames}
@@ -1254,13 +1493,18 @@ export function ActionsBar({
 }
 
 interface MixPanelProps {
-  styleParams: StyleParams;
-  onStyleParamsChange: (params: StyleParams) => void;
+  mode: Mode;
+  mix: MixIngredient[];
+  /** Turns the tab's own main template or main dream takes each time round. */
+  mainTurns: number;
+  onChange: (change: { mix?: MixIngredient[]; mainTurns?: number }) => void;
   /** Preview URL of the image behind each style ingredient, by ingredient id. */
   mixPreviews: Record<string, string>;
   onMixImageChange: (id: string, file: File | null) => void;
-  /** What "Add DeepDream settings" snapshots: the DeepDream tab as it stands. */
+  /** Where a new dream's settings start: the DeepDream tab as it stands. */
   dreamParams: DreamParams;
+  /** Where a new style's settings start: the Style Transfer tab as it stands. */
+  styleParams: StyleParams;
   presets: DreamPreset[];
   selectedPresetId: string;
   isRunning: boolean;
@@ -1270,11 +1514,31 @@ function newIngredientId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
-/** "Abstract Objects #7 · 4 ch · sharpened" — enough to tell two tunings of one preset apart in a list. */
-function dreamIngredientName(preset: DreamPreset, params: DreamParams): string {
-  const parts = [params.focusSeed > 0 ? `${preset.name} #${params.focusSeed}` : preset.name];
-  if (params.focusSeed > 0) parts.push(`${params.focusChannels} ch`);
-  if (params.objective === 'squared') parts.push('sharpened');
+type DreamNameFields = Pick<
+  MixDreamIngredient,
+  'presetId' | 'presetBlend' | 'focusSeed' | 'focusChannels' | 'morphSeed' | 'morph' | 'objective'
+>;
+
+/**
+ * "Organic Forms + Abstract Objects #7 · 4 ch · sharpened" — enough to tell two tunings apart in a list and
+ * in a track label. Rebuilt whenever one of these changes, so it never describes a dream it no longer is.
+ */
+function dreamIngredientName(presets: DreamPreset[], fields: DreamNameFields): string {
+  const nameOf = (id: string) => presets.find((p) => p.id === id)?.name ?? id;
+  const names = [fields.presetId, ...fields.presetBlend.map((entry) => entry.presetId)].map(nameOf).join(' + ');
+  // The morph's endpoints, not its amount: the name labels animation tracks, and a track label that changed
+  // whenever the morph slider moved would be no use for finding the track.
+  const morphing = fields.morph > 0 && fields.morphSeed !== fields.focusSeed;
+  const variation = (seed: number) => (seed > 0 ? `#${seed}` : 'whole');
+  const parts = [
+    morphing
+      ? `${names} ${variation(fields.focusSeed)}→${variation(fields.morphSeed)}`
+      : fields.focusSeed > 0
+        ? `${names} #${fields.focusSeed}`
+        : names,
+  ];
+  if (fields.focusSeed > 0 || (morphing && fields.morphSeed > 0)) parts.push(`${+fields.focusChannels.toFixed(2)} ch`);
+  if (fields.objective === 'squared') parts.push('sharpened');
   return parts.join(' · ');
 }
 
@@ -1286,29 +1550,33 @@ function dreamIngredientName(preset: DreamPreset, params: DreamParams): string {
  * a style's weight and a dream's step size set how hard each one pulls while it has the image.
  */
 export function MixPanel({
-  styleParams,
-  onStyleParamsChange,
+  mode,
+  mix,
+  mainTurns,
+  onChange,
   mixPreviews,
   onMixImageChange,
   dreamParams,
+  styleParams,
   presets,
   selectedPresetId,
   isRunning,
 }: MixPanelProps) {
-  const { mix } = styleParams;
   const update = (id: string, patch: Partial<MixIngredient>) =>
-    onStyleParamsChange({
-      ...styleParams,
-      mix: mix.map((entry) => (entry.id === id ? ({ ...entry, ...patch } as MixIngredient) : entry)),
+    onChange({
+      mix: mix.map((entry) => {
+        if (entry.id !== id) return entry;
+        const next = { ...entry, ...patch } as MixIngredient;
+        return next.kind === 'dream' ? { ...next, name: dreamIngredientName(presets, next) } : next;
+      }),
     });
   const remove = (id: string) => {
     onMixImageChange(id, null);
-    onStyleParamsChange({ ...styleParams, mix: mix.filter((entry) => entry.id !== id) });
+    onChange({ mix: mix.filter((entry) => entry.id !== id) });
   };
 
   const addStyle = () =>
-    onStyleParamsChange({
-      ...styleParams,
+    onChange({
       mix: [
         ...mix,
         {
@@ -1316,29 +1584,40 @@ export function MixPanel({
           id: newIngredientId(),
           turns: 1,
           templateId: null,
-          name: `Style ${mix.filter((entry) => entry.kind === 'style').length + 2}`,
+          name: `Style ${mix.filter((entry) => entry.kind === 'style').length + 1}`,
           styleWeight: styleParams.styleWeight,
+          contentWeight: styleParams.contentWeight,
+          learningRate: styleParams.learningRate,
+          totalVariationWeight: styleParams.totalVariationWeight,
         },
       ],
     });
 
-  const preset = presets.find((p) => p.id === selectedPresetId);
+  // A new dream starts as a copy of the DeepDream tab's, as the likeliest thing to want more of — then
+  // everything about it can be changed in place.
+  const presetId = presets.some((p) => p.id === selectedPresetId) ? selectedPresetId : presets[0]?.id;
   const addDream = () => {
-    if (!preset) return;
-    onStyleParamsChange({
-      ...styleParams,
+    if (!presetId) return;
+    const fields = {
+      presetId,
+      presetWeight: dreamParams.presetWeight,
+      presetBlend: dreamParams.presetBlend,
+      focusSeed: dreamParams.focusSeed,
+      focusChannels: dreamParams.focusChannels,
+      morphSeed: dreamParams.morphSeed,
+      morph: dreamParams.morph,
+      objective: dreamParams.objective,
+    };
+    onChange({
       mix: [
         ...mix,
         {
           kind: 'dream',
           id: newIngredientId(),
           turns: 1,
-          presetId: preset.id,
-          name: dreamIngredientName(preset, dreamParams),
+          ...fields,
+          name: dreamIngredientName(presets, fields),
           stepSize: dreamParams.stepSize,
-          focusSeed: dreamParams.focusSeed,
-          focusChannels: dreamParams.focusChannels,
-          objective: dreamParams.objective,
           lapLevels: dreamParams.lapLevels,
           tvWeight: dreamParams.tvWeight,
         },
@@ -1346,27 +1625,32 @@ export function MixPanel({
     });
   };
 
-  const cycle = Math.round(styleParams.templateTurns) + mix.reduce((sum, entry) => sum + Math.round(entry.turns), 0);
+  const mainName = mode === 'style' ? 'template' : 'main dream';
+  const cycle = Math.round(mainTurns) + mix.reduce((sum, entry) => sum + Math.round(entry.turns), 0);
 
   return (
     <div className="slider-panel">
       <Slider
-        label="Template turns"
-        value={styleParams.templateTurns}
+        label={mode === 'style' ? 'Template turns' : 'Main dream turns'}
+        value={mainTurns}
         min={0}
         max={10}
         step={1}
         disabled={isRunning}
-        tooltip="How many steps in a row the main template takes each time round the mix. 0 leaves it out of the rotation, so only the mix's own styles and dreams act on the image."
-        onChange={(v) => onStyleParamsChange({ ...styleParams, templateTurns: Math.max(0, Math.round(v)) })}
+        tooltip={`How many steps in a row the ${mainName} — this tab's own settings — takes each time round the mix. 0 leaves it out of the rotation, so only the mix's own dreams and styles act on the image.`}
+        onChange={(v) => onChange({ mainTurns: Math.max(0, Math.round(v)) })}
       />
 
       {mix.map((entry) => (
         <div key={entry.id} className="mix-ingredient">
+          <div className="mix-ingredient-header">
+            <span className="mix-ingredient-kind">{entry.kind === 'style' ? 'Style' : 'Dream'}</span>
+            <span className="mix-ingredient-name">{entry.name}</span>
+          </div>
           {entry.kind === 'style' ? (
             <>
               <TemplatePicker
-                label={entry.name}
+                label="Style image"
                 selectedId={entry.templateId}
                 previewUrl={mixPreviews[entry.id]}
                 disabled={isRunning}
@@ -1387,13 +1671,51 @@ export function MixPanel({
                 max={2000}
                 step={10}
                 disabled={isRunning}
-                tooltip="How strongly this style pulls the image toward its own colors and textures during its turns. It has its own weight, so one style can whisper while another shouts."
+                tooltip="How strongly this style pulls the image toward its own colors and textures during its turns."
                 onChange={(v) => update(entry.id, { styleWeight: v })}
+              />
+              <Slider
+                label="Content weight"
+                value={entry.contentWeight}
+                min={1}
+                max={50}
+                step={1}
+                disabled={isRunning}
+                tooltip="How hard this style holds on to the photo's structure while it paints. Low lets it repaint freely, over whatever the dreams have drawn too."
+                onChange={(v) => update(entry.id, { contentWeight: v })}
+              />
+              <Slider
+                label="Learning rate"
+                value={entry.learningRate}
+                min={0.002}
+                max={0.05}
+                step={0.002}
+                disabled={isRunning}
+                tooltip="How far each of this style's turns moves the image. It is this style's step size, set against the dreams' own."
+                onChange={(v) => update(entry.id, { learningRate: v })}
+              />
+              <Slider
+                label="Smoothing (TV weight)"
+                value={entry.totalVariationWeight}
+                min={0}
+                max={5}
+                step={0.1}
+                disabled={isRunning}
+                tooltip="How much this style's turns smooth away fine, noisy detail."
+                onChange={(v) => update(entry.id, { totalVariationWeight: v })}
               />
             </>
           ) : (
             <>
-              <span className="dropzone-label">{entry.name}</span>
+              <PresetBlendEditor
+                presets={presets}
+                presetId={entry.presetId}
+                presetWeight={entry.presetWeight}
+                blend={entry.presetBlend}
+                onChange={(change) => update(entry.id, change)}
+                pickPrimary
+                disabled={isRunning}
+              />
               <Slider
                 label="Step size"
                 value={entry.stepSize}
@@ -1401,18 +1723,43 @@ export function MixPanel({
                 max={0.1}
                 step={0.005}
                 disabled={isRunning}
-                tooltip="How far each of this dream's turns pushes the image toward what its preset sees. The styles push back on their own turns, so this is the balance between creatures growing and being painted over."
+                tooltip="How far each of this dream's turns pushes the image toward what its preset sees, set against what everything else in the mix pushes toward on its own turns."
                 onChange={(v) => update(entry.id, { stepSize: v })}
               />
+              <VariationControls values={entry} onChange={(patch) => update(entry.id, patch)} disabled={isRunning} compact />
+              <label
+                className="field-row"
+                title="Average spreads detail evenly; Sharpened pushes hardest on what the network half-sees, for fewer, bolder forms."
+              >
+                <span>Objective</span>
+                <select
+                  value={entry.objective}
+                  onChange={(e) => update(entry.id, { objective: e.target.value as DreamObjective })}
+                  disabled={isRunning}
+                >
+                  <option value="mean">Average</option>
+                  <option value="squared">Sharpened</option>
+                </select>
+              </label>
               <Slider
-                label="Variation"
-                value={entry.focusSeed}
-                min={0}
-                max={999}
+                label="Frequency bands"
+                value={entry.lapLevels}
+                min={1}
+                max={6}
                 step={1}
                 disabled={isRunning}
-                tooltip="Which set of feature detectors this dream amplifies, as on the DeepDream tab. 0 is the whole layer."
-                onChange={(v) => update(entry.id, { focusSeed: Math.max(0, Math.round(v)) })}
+                tooltip="As on the DeepDream tab: more bands balance this dream's push across coarse and fine detail instead of letting fine grain dominate."
+                onChange={(v) => update(entry.id, { lapLevels: Math.max(1, Math.round(v)) })}
+              />
+              <Slider
+                label="Smoothing (TV weight)"
+                value={entry.tvWeight}
+                min={0}
+                max={1}
+                step={0.05}
+                disabled={isRunning}
+                tooltip="The share of this dream's step spent smoothing rather than amplifying."
+                onChange={(v) => update(entry.id, { tvWeight: v })}
               />
             </>
           )}
@@ -1437,25 +1784,25 @@ export function MixPanel({
       <div className="controls-actions">
         <button
           className="btn btn--secondary"
-          onClick={addStyle}
-          disabled={isRunning}
-          title="Adds another style image to the rotation, with its own weight."
+          onClick={addDream}
+          disabled={isRunning || !presetId}
+          title="Adds a dream to the rotation, starting as a copy of the DeepDream tab's settings. Change its preset, blend, variation and the rest right here."
         >
-          Add style
+          Add dream
         </button>
         <button
           className="btn btn--secondary"
-          onClick={addDream}
-          disabled={isRunning || !preset}
-          title="Adds the DeepDream tab's preset, exactly as tuned there — variation, focus channels, objective and step size — to the rotation. Tune another on the DeepDream tab and add it too."
+          onClick={addStyle}
+          disabled={isRunning}
+          title="Adds a style image to the rotation, with its own weights and learning rate, starting from the Style Transfer tab's."
         >
-          Add DeepDream settings
+          Add style
         </button>
       </div>
       <p className="field-hint">
         {mix.length === 0
-          ? 'Plain style transfer. Add styles or tuned DeepDream presets to take turns with the template.'
-          : `Each cycle is ${cycle} step${cycle === 1 ? '' : 's'}; Steps per octave counts them all. The brush uses the template and the dreams, not the extra styles.`}
+          ? `Plain ${mode === 'style' ? 'style transfer' : 'DeepDream'}. Add dreams and styles — any number, in any combination — to take turns with the ${mainName}.`
+          : `Each cycle is ${cycle} step${cycle === 1 ? '' : 's'}; Steps per octave counts them all. Octaves, tiling and color settings come from this tab. The brush uses the ${mainName} and the dreams, not the extra styles.`}
       </p>
     </div>
   );

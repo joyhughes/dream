@@ -1,5 +1,5 @@
 import { readPngText, writePngText } from './pngText';
-import type { DreamParams, MixIngredient, Mode, StyleParams } from '../types';
+import type { DreamParams, MixIngredient, Mode, PresetBlendEntry, StyleParams } from '../types';
 import type { FeatureNetworkId } from './featureModel';
 
 /**
@@ -52,7 +52,7 @@ function readRecord(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
 }
 
-function readDreamParams(raw: unknown, fallback: DreamParams): DreamParams {
+function readDreamParams(raw: unknown, fallback: DreamParams, styleDefaults: StyleEntryDefaults): DreamParams {
   const source = readRecord(raw);
   const regularizers = readRecord(source.regularizers);
 
@@ -77,13 +77,37 @@ function readDreamParams(raw: unknown, fallback: DreamParams): DreamParams {
     // A picture saved before these existed was made from the whole layer with the plain mean, so a missing
     // value means that rather than whatever happens to be set now — otherwise it would not reproduce.
     focusSeed: Math.round(readNumber(source.focusSeed, 0, 0, 2 ** 31 - 1)),
-    focusChannels: Math.round(readNumber(source.focusChannels, fallback.focusChannels, 1, 4096)),
+    focusChannels: readNumber(source.focusChannels, fallback.focusChannels, 1, 4096),
+    morphSeed: Math.round(readNumber(source.morphSeed, 0, 0, 2 ** 31 - 1)),
+    morph: readNumber(source.morph, 0, 0, 1),
     objective: readOneOf(source.objective, ['mean', 'squared'] as const, 'mean'),
+    presetWeight: readNumber(source.presetWeight, 1, 0, 1000),
+    presetBlend: readPresetBlend(source.presetBlend),
+    // A picture from before DeepDream had a mix was the main dream alone.
+    mainTurns: Math.round(readNumber(source.mainTurns, 1, 0, 100)),
+    mix: readMix(source.mix, styleDefaults),
   };
 }
 
+/** What a saved style entry is missing when it predates carrying these itself. */
+type StyleEntryDefaults = Pick<StyleParams, 'contentWeight' | 'learningRate' | 'totalVariationWeight'>;
+
 function readString(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value.slice(0, 200) : fallback;
+}
+
+/** Missing means the preset alone, which is what every picture saved before blending was made with. */
+function readPresetBlend(raw: unknown): PresetBlendEntry[] {
+  if (!Array.isArray(raw)) return [];
+
+  const blend: PresetBlendEntry[] = [];
+  for (const entry of raw.slice(0, 16)) {
+    const source = readRecord(entry);
+    const id = readString(source.id, '');
+    if (!id || typeof source.presetId !== 'string' || blend.some((existing) => existing.id === id)) continue;
+    blend.push({ id, presetId: source.presetId.slice(0, 200), weight: readNumber(source.weight, 1, 0, 1000) });
+  }
+  return blend;
 }
 
 /**
@@ -91,7 +115,7 @@ function readString(value: unknown, fallback: string): string {
  * not in the file — only which built-in it was, if it was one — so the app reloads that, and asks for an
  * image for any that was the user's own.
  */
-function readMix(raw: unknown): MixIngredient[] {
+function readMix(raw: unknown, styleDefaults: StyleEntryDefaults): MixIngredient[] {
   if (!Array.isArray(raw)) return [];
 
   const mix: MixIngredient[] = [];
@@ -109,6 +133,9 @@ function readMix(raw: unknown): MixIngredient[] {
         templateId: typeof source.templateId === 'string' ? source.templateId.slice(0, 200) : null,
         name: readString(source.name, 'Style'),
         styleWeight: readNumber(source.styleWeight, 400, 0, 1000000),
+        contentWeight: readNumber(source.contentWeight, styleDefaults.contentWeight, 0, 100000),
+        learningRate: readNumber(source.learningRate, styleDefaults.learningRate, 0.00001, 10),
+        totalVariationWeight: readNumber(source.totalVariationWeight, styleDefaults.totalVariationWeight, 0, 1000),
       });
     } else if (source.kind === 'dream' && typeof source.presetId === 'string') {
       mix.push({
@@ -117,9 +144,13 @@ function readMix(raw: unknown): MixIngredient[] {
         turns,
         presetId: source.presetId.slice(0, 200),
         name: readString(source.name, 'Dream'),
+        presetWeight: readNumber(source.presetWeight, 1, 0, 1000),
+        presetBlend: readPresetBlend(source.presetBlend),
         stepSize: readNumber(source.stepSize, 0.02, 0, 10),
         focusSeed: Math.round(readNumber(source.focusSeed, 0, 0, 2 ** 31 - 1)),
-        focusChannels: Math.round(readNumber(source.focusChannels, 8, 1, 4096)),
+        focusChannels: readNumber(source.focusChannels, 8, 1, 4096),
+        morphSeed: Math.round(readNumber(source.morphSeed, 0, 0, 2 ** 31 - 1)),
+        morph: readNumber(source.morph, 0, 0, 1),
         objective: readOneOf(source.objective, ['mean', 'squared'] as const, 'mean'),
         lapLevels: Math.round(readNumber(source.lapLevels, 1, 1, 12)),
         tvWeight: readNumber(source.tvWeight, 0, 0, 100),
@@ -133,11 +164,15 @@ function readStyleParams(raw: unknown, fallback: StyleParams): StyleParams {
   const source = readRecord(raw);
   const regularizers = readRecord(source.regularizers);
 
+  const contentWeight = readNumber(source.contentWeight, fallback.contentWeight, 0, 100000);
+  const totalVariationWeight = readNumber(source.totalVariationWeight, fallback.totalVariationWeight, 0, 1000);
+  const learningRate = readNumber(source.learningRate, fallback.learningRate, 0.00001, 10);
+
   return {
-    contentWeight: readNumber(source.contentWeight, fallback.contentWeight, 0, 100000),
+    contentWeight,
     styleWeight: readNumber(source.styleWeight, fallback.styleWeight, 0, 1000000),
-    totalVariationWeight: readNumber(source.totalVariationWeight, fallback.totalVariationWeight, 0, 1000),
-    learningRate: readNumber(source.learningRate, fallback.learningRate, 0.00001, 10),
+    totalVariationWeight,
+    learningRate,
     octaves: Math.round(readNumber(source.octaves, fallback.octaves, 1, 12)),
     octaveScale: readNumber(source.octaveScale, fallback.octaveScale, 1.01, 4),
     stepsPerOctave: Math.round(readNumber(source.stepsPerOctave, fallback.stepsPerOctave, 1, 2000)),
@@ -154,7 +189,8 @@ function readStyleParams(raw: unknown, fallback: StyleParams): StyleParams {
     },
     // As with the dream focus settings: a picture from before the mix existed was the template alone.
     templateTurns: Math.round(readNumber(source.templateTurns, 1, 0, 100)),
-    mix: readMix(source.mix),
+    // A style entry saved before it carried these ran with the template's.
+    mix: readMix(source.mix, { contentWeight, learningRate, totalVariationWeight }),
   };
 }
 
@@ -181,7 +217,7 @@ export function decodeParameters(text: string | null, fallback: SavedParameters)
     // Not checked against the known presets: which exist depends on the network, which may still be
     // loading. A preset that turns out not to exist is dropped when the list is rebuilt.
     presetId: typeof source.presetId === 'string' ? source.presetId.slice(0, 200) : fallback.presetId,
-    dream: readDreamParams(source.dream, fallback.dream),
+    dream: readDreamParams(source.dream, fallback.dream, fallback.style),
     style: readStyleParams(source.style, fallback.style),
   };
 }

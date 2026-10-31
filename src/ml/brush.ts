@@ -90,6 +90,7 @@ export function buildDabMask(
 export class DreamBrush {
   private image: tf.Tensor3D;
   private cachedMask: { key: string; mask: tf.Tensor3D } | null = null;
+  private disposed = false;
 
   constructor(initial: tf.Tensor3D) {
     this.image = tf.tidy(() => tf.keep(initial.clone()));
@@ -122,33 +123,46 @@ export class DreamBrush {
   ): Promise<void> {
     const [height, width] = this.shape;
 
+    // A patch can take seconds, and the app may throw this brush away meanwhile — a new photo, a Generate
+    // that hands its result over. A clone shares the image's data and holds it alive by count, so the blend
+    // below still has something to read; the result is simply dropped if nothing wants it any more.
+    const source = this.image.clone();
     const cropped = tf.tidy(
-      () => tf.keep(this.image.slice([patch.y, patch.x, 0], [patch.height, patch.width, 3])) as tf.Tensor3D,
+      () => tf.keep(source.slice([patch.y, patch.x, 0], [patch.height, patch.width, 3])) as tf.Tensor3D,
     );
 
     let processed: tf.Tensor3D;
     try {
       processed = await process(cropped);
+    } catch (err) {
+      source.dispose();
+      throw err;
     } finally {
       cropped.dispose();
     }
 
+    if (this.disposed) {
+      processed.dispose();
+      source.dispose();
+      return;
+    }
+
     const blended = tf.tidy(() => {
-      const existing = this.image.slice([patch.y, patch.x, 0], [patch.height, patch.width, 3]) as tf.Tensor3D;
+      const existing = source.slice([patch.y, patch.x, 0], [patch.height, patch.width, 3]) as tf.Tensor3D;
       const mixed = existing.add(processed.sub(existing).mul(mask)) as tf.Tensor3D;
 
       // Written back by rebuilding the rows and columns around the patch. tf has no scatter-into-a-slice,
       // and concat of the untouched parts is cheaper than materializing a full-image mask per dab.
-      const above = patch.y > 0 ? this.image.slice([0, 0, 0], [patch.y, width, 3]) : null;
+      const above = patch.y > 0 ? source.slice([0, 0, 0], [patch.y, width, 3]) : null;
       const below =
         patch.y + patch.height < height
-          ? this.image.slice([patch.y + patch.height, 0, 0], [height - patch.y - patch.height, width, 3])
+          ? source.slice([patch.y + patch.height, 0, 0], [height - patch.y - patch.height, width, 3])
           : null;
 
-      const left = patch.x > 0 ? this.image.slice([patch.y, 0, 0], [patch.height, patch.x, 3]) : null;
+      const left = patch.x > 0 ? source.slice([patch.y, 0, 0], [patch.height, patch.x, 3]) : null;
       const right =
         patch.x + patch.width < width
-          ? this.image.slice(
+          ? source.slice(
               [patch.y, patch.x + patch.width, 0],
               [patch.height, width - patch.x - patch.width, 3],
             )
@@ -161,6 +175,7 @@ export class DreamBrush {
     });
 
     processed.dispose();
+    source.dispose();
     this.image.dispose();
     this.image = blended;
   }
@@ -226,7 +241,13 @@ export class DreamBrush {
     return mask;
   }
 
+  /** True once `dispose` has run. A dab still in flight then finishes without touching anything. */
+  get isDisposed(): boolean {
+    return this.disposed;
+  }
+
   dispose() {
+    this.disposed = true;
     this.image.dispose();
     this.cachedMask?.mask.dispose();
     this.cachedMask = null;

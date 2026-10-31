@@ -23,7 +23,7 @@ import {
 } from './colorSpace';
 import { focusedChannels } from './channelFocus';
 import type { PauseController } from './pauseController';
-import type { ColorSpace, DreamParams, DreamPreset } from '../types';
+import type { ColorSpace, DreamParams, DreamPreset, PresetBlendEntry } from '../types';
 
 export interface DeepDreamProgress {
   octave: number;
@@ -41,13 +41,66 @@ export interface RunDeepDreamOptions {
   onProgress?: (progress: DeepDreamProgress) => void | Promise<void>;
   signal?: AbortSignal;
   pauseController?: PauseController;
+  /**
+   * Where the ascent starts, in place of the base image — an animation's previous frame. The base image is
+   * still what color preservation and normalization hold the result to. Same size as the base image.
+   */
+  startFrom?: tf.Tensor3D;
 }
 
 /** The settings one ascent step reads. A style run's mix supplies these from a dream ingredient. */
 export type DreamStepParams = Pick<
   DreamParams,
-  'tileSize' | 'lapLevels' | 'tvWeight' | 'stepSize' | 'colorSpace' | 'focusSeed' | 'focusChannels' | 'objective'
+  | 'tileSize'
+  | 'lapLevels'
+  | 'tvWeight'
+  | 'stepSize'
+  | 'colorSpace'
+  | 'focusSeed'
+  | 'focusChannels'
+  | 'morphSeed'
+  | 'morph'
+  | 'objective'
 >;
+
+/**
+ * One layer's score under the variation settings, as a function that moves smoothly with every one of them.
+ *
+ * A variation is a set of channels, and sets don't sit on a line: variation 8 is no nearer 7 than 400 is. What
+ * does move smoothly is the objective, so the in-between states are made there. A fractional channel count
+ * fades its next channel in. A morph is a weighted mix of the two variations' scores, each divided by its
+ * own size (held fixed for the gradient) so that one family isn't swamped by another that happens to respond
+ * more strongly, then scaled back to the mixed size — which makes either end exactly that variation alone.
+ */
+function focusedScore(act: tf.Tensor, nodeName: string, params: DreamStepParams): tf.Scalar {
+  const channelCount = act.shape[act.rank - 1];
+  const scoreOf = (seed: number, count: number): tf.Scalar => {
+    const channels = focusedChannels(nodeName, channelCount, seed, count);
+    const focused = channels ? tf.gather(act, tf.tensor1d(channels, 'int32'), act.rank - 1) : act;
+    const scored = params.objective === 'squared' ? focused.square() : focused;
+    return scored.mean() as tf.Scalar;
+  };
+
+  const count = Math.max(1, params.focusChannels);
+  const fill = count - Math.floor(count);
+  const variation = (seed: number): tf.Scalar =>
+    fill === 0
+      ? scoreOf(seed, count)
+      : (scoreOf(seed, Math.floor(count)).mul(1 - fill).add(scoreOf(seed, Math.floor(count) + 1).mul(fill)) as tf.Scalar);
+
+  const t = Math.min(1, Math.max(0, params.morph));
+  const from = Math.round(params.focusSeed);
+  const to = Math.round(params.morphSeed);
+  if (t === 0 || from === to) return variation(from);
+  if (t === 1) return variation(to);
+
+  const a = variation(from);
+  const b = variation(to);
+  const sizeA = stopGradient(a.abs().add(1e-6) as tf.Scalar);
+  const sizeB = stopGradient(b.abs().add(1e-6) as tf.Scalar);
+  const mixedSize = sizeA.mul(1 - t).add(sizeB.mul(t));
+  return a.div(sizeA).mul(1 - t).add(b.div(sizeB).mul(t)).mul(mixedSize) as tf.Scalar;
+}
 
 function computeLoss(
   tile: tf.Tensor3D,
@@ -62,14 +115,68 @@ function computeLoss(
   const nodeNames = preset.layers.map((l) => l.nodeName);
   const activations = featureModel.activations(batched, nodeNames);
 
-  const terms = activations.map((act, i) => {
-    const channels = focusedChannels(nodeNames[i], act.shape[act.rank - 1], params.focusSeed, params.focusChannels);
-    const focused = channels ? tf.gather(act, tf.tensor1d(channels, 'int32'), act.rank - 1) : act;
-    const scored = params.objective === 'squared' ? focused.square() : focused;
-    return scored.mean().mul(preset.layers[i].weight) as tf.Scalar;
-  });
-  const total = terms.reduce((acc, t) => acc.add(t) as tf.Scalar, tf.scalar(0));
-  return total;
+  const terms = activations.map((act, i) => focusedScore(act, nodeNames[i], params));
+
+  if (!preset.groups) {
+    return terms.reduce((acc, t, i) => acc.add(t.mul(preset.layers[i].weight)) as tf.Scalar, tf.scalar(0));
+  }
+
+  // A blend. Layers differ by orders of magnitude in how strongly they respond, so summed raw, the loudest
+  // preset would take the whole step whatever its weight. Dividing each group by its own size, held fixed
+  // for the gradient, gives every group a push of the same strength before its weight is applied: the
+  // gradient of g / |g| is grad(g) / |g|, the relative change rather than the absolute one.
+  const termOf = new Map(nodeNames.map((name, i) => [name, terms[i]]));
+  return preset.groups.reduce((acc, group) => {
+    const sum = group.layers.reduce(
+      (groupAcc, layer) => groupAcc.add(termOf.get(layer.nodeName)!.mul(layer.weight)) as tf.Scalar,
+      tf.scalar(0),
+    );
+    const scale = stopGradient(sum.abs().add(1e-6) as tf.Scalar);
+    return acc.add(sum.div(scale).mul(group.weight)) as tf.Scalar;
+  }, tf.scalar(0));
+}
+
+/** The value of `x`, with no gradient flowing back through it. tf.js has no built-in for this. */
+const stopGradient = tf.customGrad((...args: (tf.Tensor | tf.GradSaveFunc)[]) => ({
+  value: tf.clone(args[0] as tf.Tensor),
+  gradFunc: (dy: tf.Tensor | tf.Tensor[]) => tf.zerosLike(dy as tf.Tensor),
+})) as unknown as (x: tf.Scalar) => tf.Scalar;
+
+/**
+ * The preset a run amplifies: `primaryId` alone, or blended with further presets when there are any.
+ *
+ * A blend amplifies every layer any of its presets names, in one pass through the network, with each preset
+ * as a group carrying its own weight. With nothing blended in, the preset comes back untouched, so a run
+ * that blends nothing is exactly the run it always was. Entries naming a preset this network lacks, or at
+ * zero weight, drop out; if the selected preset is itself at zero and nothing else remains, it stands alone
+ * rather than leaving the run with nothing to ascend.
+ */
+export function blendPresets(
+  presets: DreamPreset[],
+  primaryId: string,
+  primaryWeight: number,
+  blend: PresetBlendEntry[],
+): DreamPreset | undefined {
+  const primary = presets.find((p) => p.id === primaryId);
+  if (!primary) return undefined;
+
+  const members = [{ preset: primary, weight: primaryWeight }, ...blend.flatMap((entry) => {
+    const preset = presets.find((p) => p.id === entry.presetId);
+    return preset ? [{ preset, weight: entry.weight }] : [];
+  })].filter((member) => member.weight > 0);
+
+  if (blend.length === 0 || members.length === 0) return primary;
+
+  const layers = Array.from(
+    new Map(members.flatMap((m) => m.preset.layers).map((layer) => [layer.nodeName, layer])).values(),
+  );
+  return {
+    id: primary.id,
+    name: members.map((m) => m.preset.name).join(' + '),
+    description: primary.description,
+    layers,
+    groups: members.map((m) => ({ weight: m.weight, layers: m.preset.layers })),
+  };
 }
 
 /**
@@ -111,7 +218,7 @@ export async function dreamAscentStep(
 }
 
 export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDreamOptions): Promise<tf.Tensor3D> {
-  const { featureModel, preset, params, previewEvery = 5, onProgress, signal, pauseController } = options;
+  const { featureModel, preset, params, previewEvery = 5, onProgress, signal, pauseController, startFrom } = options;
 
   if (preset.layers.length === 0) {
     throw new Error('Preset has no target layers.');
@@ -134,7 +241,7 @@ export async function runDeepDream(baseImage: tf.Tensor3D, options: RunDeepDream
   // From here to the end of the run `current` is held in `colorSpace`, not RGB. Everything that touches
   // it — the loss, the regularizers, the preview — converts at its own boundary.
   let current = tf.tidy(() => {
-    const resized = tf.image.resizeBilinear(baseImage, shapes[0]) as tf.Tensor3D;
+    const resized = tf.image.resizeBilinear(startFrom ?? baseImage, shapes[0]) as tf.Tensor3D;
     return tf.keep(fromRgb(resized, colorSpace)) as tf.Tensor3D;
   });
 
